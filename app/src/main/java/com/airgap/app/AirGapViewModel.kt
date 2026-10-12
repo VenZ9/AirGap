@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.airgap.app.ui.theme.AppThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,7 +20,18 @@ sealed class Screen {
     data object Home : Screen()
     data object Send : Screen()
     data object Receive : Screen()
+    data object Settings : Screen()
 }
+
+data class AppSettings(
+    val themeMode: AppThemeMode = AppThemeMode.DEFAULT,
+    val defaultChunkBytes: Int = TransferProtocol.DEFAULT_CHUNK_BYTES,
+    val defaultSpeedMs: Long = 280L,
+    val defaultEncrypt: Boolean = false,
+    val keepScreenOnActive: Boolean = true,
+    val loopContinuous: Boolean = true,
+    val errorCorrectionMargin: Int = 1
+)
 
 data class TransmitState(
     val fileName: String = "",
@@ -49,6 +61,11 @@ data class ReceiveState(
 
 class AirGapViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val prefs = application.getSharedPreferences("airgap_prefs", Context.MODE_PRIVATE)
+
+    private val _settings = MutableStateFlow(loadSettings())
+    val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+
     private val _screen = MutableStateFlow<Screen>(Screen.Home)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
@@ -67,6 +84,64 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
     private val receivedFramesMap = mutableMapOf<Int, TransferProtocol.Frame>()
 
     private var transmitLoopJob: Job? = null
+
+    private fun loadSettings(): AppSettings {
+        val themeName = prefs.getString("theme_mode", AppThemeMode.DEFAULT.name) ?: AppThemeMode.DEFAULT.name
+        val theme = runCatching { AppThemeMode.valueOf(themeName) }.getOrDefault(AppThemeMode.DEFAULT)
+        val chunk = prefs.getInt("default_chunk", TransferProtocol.DEFAULT_CHUNK_BYTES)
+        val speed = prefs.getLong("default_speed", 280L)
+        val enc = prefs.getBoolean("default_encrypt", false)
+        val keepAwake = prefs.getBoolean("keep_awake", true)
+        val loop = prefs.getBoolean("loop_continuous", true)
+        val margin = prefs.getInt("qr_margin", 1)
+
+        return AppSettings(
+            themeMode = theme,
+            defaultChunkBytes = chunk,
+            defaultSpeedMs = speed,
+            defaultEncrypt = enc,
+            keepScreenOnActive = keepAwake,
+            loopContinuous = loop,
+            errorCorrectionMargin = margin
+        )
+    }
+
+    fun updateTheme(theme: AppThemeMode) {
+        _settings.value = _settings.value.copy(themeMode = theme)
+        prefs.edit().putString("theme_mode", theme.name).apply()
+    }
+
+    fun updateDefaultChunkBytes(bytes: Int) {
+        val safe = bytes.coerceIn(TransferProtocol.MIN_CHUNK_BYTES, TransferProtocol.MAX_CHUNK_BYTES)
+        _settings.value = _settings.value.copy(defaultChunkBytes = safe)
+        prefs.edit().putInt("default_chunk", safe).apply()
+    }
+
+    fun updateDefaultSpeed(speedMs: Long) {
+        _settings.value = _settings.value.copy(defaultSpeedMs = speedMs)
+        prefs.edit().putLong("default_speed", speedMs).apply()
+    }
+
+    fun updateDefaultEncrypt(encrypt: Boolean) {
+        _settings.value = _settings.value.copy(defaultEncrypt = encrypt)
+        prefs.edit().putBoolean("default_encrypt", encrypt).apply()
+    }
+
+    fun updateKeepAwake(keepAwake: Boolean) {
+        _settings.value = _settings.value.copy(keepScreenOnActive = keepAwake)
+        prefs.edit().putBoolean("keep_awake", keepAwake).apply()
+    }
+
+    fun updateLoopContinuous(loop: Boolean) {
+        _settings.value = _settings.value.copy(loopContinuous = loop)
+        prefs.edit().putBoolean("loop_continuous", loop).apply()
+    }
+
+    fun resetSettingsToDefault() {
+        prefs.edit().clear().apply()
+        _settings.value = AppSettings()
+        showMessage("Settings restored to factory defaults.")
+    }
 
     fun navigateTo(target: Screen) {
         _screen.value = target
@@ -137,7 +212,7 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
                     frames = prepared.frames,
                     currentFrameIndex = 0,
                     isPlaying = true,
-                    speedMs = 280L,
+                    speedMs = _settings.value.defaultSpeedMs,
                     isPreparing = false
                 )
 
@@ -188,8 +263,13 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
                 delay(delayTime)
                 if (_transmitState.value.isPlaying && _transmitState.value.frames.isNotEmpty()) {
                     val count = _transmitState.value.frames.size
-                    val nextIdx = (_transmitState.value.currentFrameIndex + 1) % count
-                    _transmitState.value = _transmitState.value.copy(currentFrameIndex = nextIdx)
+                    val currentIdx = _transmitState.value.currentFrameIndex
+                    if (!_settings.value.loopContinuous && currentIdx == count - 1) {
+                        _transmitState.value = _transmitState.value.copy(isPlaying = false)
+                    } else {
+                        val nextIdx = (currentIdx + 1) % count
+                        _transmitState.value = _transmitState.value.copy(currentFrameIndex = nextIdx)
+                    }
                 }
             }
         }
@@ -220,9 +300,7 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
             synchronized(receivedFramesMap) {
                 val current = _receiveState.value
 
-                // If starting a new session or switching transfer sessions
                 if (current.session.isNotEmpty() && current.session != frame.session) {
-                    // Ignore other sessions unless current is empty
                     return
                 }
 
@@ -252,7 +330,7 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } catch (_: Exception) {
-            // Ignore QR codes that don't belong to AirGap or are unreadable
+            // Ignore QR codes not matching AirGap protocol
         }
     }
 

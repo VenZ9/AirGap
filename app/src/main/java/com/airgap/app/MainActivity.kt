@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -48,7 +49,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            AirGapTheme {
+            val settings by viewModel.settings.collectAsState()
+            AirGapTheme(themeMode = settings.themeMode) {
                 AirGapMainScreen(viewModel = viewModel)
             }
         }
@@ -69,6 +71,7 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
     val context = LocalContext.current
     val activity = context as MainActivity
     val currentScreen by viewModel.screen.collectAsState()
+    val settings by viewModel.settings.collectAsState()
     val statusMsg by viewModel.statusMessage.collectAsState()
     val isError by viewModel.isErrorMessage.collectAsState()
 
@@ -84,23 +87,24 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
         }
     }
 
-    LaunchedEffect(currentScreen) {
-        activity.keepScreenOn(currentScreen == Screen.Send || currentScreen == Screen.Receive)
+    LaunchedEffect(currentScreen, settings.keepScreenOnActive) {
+        val shouldKeep = settings.keepScreenOnActive && (currentScreen == Screen.Send || currentScreen == Screen.Receive)
+        activity.keepScreenOn(shouldKeep)
     }
 
     Scaffold(
         snackbarHost = {
             SnackbarHost(snackbarHostState) { data ->
                 Snackbar(
-                    containerColor = if (isError) AccentError else SurfaceElevatedDark,
-                    contentColor = if (isError) Color.White else AccentPrimary,
+                    containerColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isError) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.primary,
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(data.visuals.message, fontWeight = FontWeight.Medium)
                 }
             }
         },
-        containerColor = BgDark,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             AirGapTopBar(
                 screen = currentScreen,
@@ -111,8 +115,12 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
                             viewModel.resetReceiver()
                             viewModel.navigateTo(Screen.Home)
                         }
+                        Screen.Settings -> viewModel.navigateTo(Screen.Home)
                         Screen.Home -> {}
                     }
+                },
+                onOpenSettings = {
+                    viewModel.navigateTo(Screen.Settings)
                 }
             )
         }
@@ -130,6 +138,7 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
                     Screen.Home -> HomeScreen(viewModel = viewModel)
                     Screen.Send -> SendScreen(viewModel = viewModel)
                     Screen.Receive -> ReceiveScreen(viewModel = viewModel)
+                    Screen.Settings -> SettingsScreen(viewModel = viewModel)
                 }
             }
         }
@@ -140,12 +149,13 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
 @Composable
 private fun AirGapTopBar(
     screen: Screen,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = BgDark,
-            titleContentColor = TextPrimary
+            containerColor = MaterialTheme.colorScheme.background,
+            titleContentColor = MaterialTheme.colorScheme.onBackground
         ),
         navigationIcon = {
             if (screen != Screen.Home) {
@@ -153,49 +163,56 @@ private fun AirGapTopBar(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = TextPrimary
+                        tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
             }
         },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(AccentPrimary, RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "AG",
-                        color = BgDark,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 14.sp
-                    )
-                }
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_logo),
+                    contentDescription = "AirGap Logo",
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(34.dp)
+                )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        "AirGap",
+                        when (screen) {
+                            Screen.Settings -> "Settings"
+                            Screen.Send -> "Sending File"
+                            Screen.Receive -> "Scanning Receiver"
+                            Screen.Home -> "AirGap"
+                        },
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
                         "OFFLINE OPTICAL SYNC",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = TextTertiary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         letterSpacing = 1.2.sp
                     )
                 }
             }
         },
         actions = {
+            if (screen == Screen.Home) {
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+            }
             Surface(
-                color = SurfaceVariantDark,
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -209,7 +226,7 @@ private fun AirGapTopBar(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         "OFFLINE",
-                        color = TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp
@@ -224,10 +241,12 @@ private fun AirGapTopBar(
 @Composable
 fun HomeScreen(viewModel: AirGapViewModel) {
     val context = LocalContext.current
-    var isEncryptionEnabled by remember { mutableStateOf(false) }
+    val settings by viewModel.settings.collectAsState()
+
+    var isEncryptionEnabled by remember(settings.defaultEncrypt) { mutableStateOf(settings.defaultEncrypt) }
     var passphrase by remember { mutableStateOf("") }
     var isPassphraseVisible by remember { mutableStateOf(false) }
-    var selectedChunkSize by remember { mutableIntStateOf(TransferProtocol.DEFAULT_CHUNK_BYTES) }
+    var selectedChunkSize by remember(settings.defaultChunkBytes) { mutableIntStateOf(settings.defaultChunkBytes) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -261,23 +280,42 @@ fun HomeScreen(viewModel: AirGapViewModel) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        // Hero headline
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                "Offline Transfer",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Text(
-                "Transfer files using sequential animated QR codes. No internet, Wi-Fi, Bluetooth, or local network required.",
-                fontSize = 14.sp,
-                color = TextSecondary,
-                lineHeight = 20.sp
-            )
+        // Hero headline with Brand Logo Banner
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        ) {
+            Row(
+                modifier = Modifier.padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_logo),
+                    contentDescription = "AirGap Logo",
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(56.dp)
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Offline Optical Transfer",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "Air-gapped file sharing with animated QR codes. No network, pairing, or cloud required.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
         }
 
-        // Action Cards
+        // Action Cards (Send & Receive)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -290,8 +328,8 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     .clickable {
                         filePickerLauncher.launch(arrayOf("*/*"))
                     },
-                color = SurfaceDark,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -300,13 +338,13 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .background(AccentPrimary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.FileUpload,
                             contentDescription = "Send",
-                            tint = AccentPrimary
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                     Column {
@@ -314,12 +352,12 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                             "Send File",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             "Display animated QR",
                             fontSize = 12.sp,
-                            color = TextTertiary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -338,8 +376,8 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
                     },
-                color = SurfaceDark,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -348,13 +386,13 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .background(AccentSecondary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCodeScanner,
                             contentDescription = "Receive",
-                            tint = AccentSecondary
+                            tint = MaterialTheme.colorScheme.secondary
                         )
                     }
                     Column {
@@ -362,12 +400,12 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                             "Receive",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             "Scan with camera",
                             fontSize = 12.sp,
-                            color = TextTertiary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -378,8 +416,8 @@ fun HomeScreen(viewModel: AirGapViewModel) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = SurfaceDark,
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
@@ -397,32 +435,26 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                         Icon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Security",
-                            tint = if (isEncryptionEnabled) AccentPrimary else TextTertiary,
+                            tint = if (isEncryptionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
                         Column {
                             Text(
                                 "Authenticated Encryption",
                                 fontWeight = FontWeight.SemiBold,
-                                color = TextPrimary,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 14.sp
                             )
                             Text(
                                 if (isEncryptionEnabled) "AES-256-GCM + PBKDF2 active" else "Plaintext with SHA-256 integrity",
-                                color = TextTertiary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp
                             )
                         }
                     }
                     Switch(
                         checked = isEncryptionEnabled,
-                        onCheckedChange = { isEncryptionEnabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = BgDark,
-                            checkedTrackColor = AccentPrimary,
-                            uncheckedThumbColor = TextTertiary,
-                            uncheckedTrackColor = SurfaceVariantDark
-                        )
+                        onCheckedChange = { isEncryptionEnabled = it }
                     )
                 }
 
@@ -439,16 +471,10 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                                 Icon(
                                     imageVector = if (isPassphraseVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                     contentDescription = "Toggle Passphrase Visibility",
-                                    tint = TextSecondary
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentPrimary,
-                            unfocusedBorderColor = BorderSubtle,
-                            focusedLabelColor = AccentPrimary,
-                            unfocusedLabelColor = TextTertiary
-                        ),
                         shape = RoundedCornerShape(12.dp)
                     )
                 }
@@ -459,8 +485,8 @@ fun HomeScreen(viewModel: AirGapViewModel) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = SurfaceDark,
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
@@ -473,20 +499,20 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     Icon(
                         imageVector = Icons.Default.Tune,
                         contentDescription = "QR Density",
-                        tint = TextSecondary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
                         "QR Code Density",
                         fontWeight = FontWeight.SemiBold,
-                        color = TextPrimary,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp
                     )
                 }
                 Text(
                     "Select chunk size for your display and camera resolution:",
                     fontSize = 12.sp,
-                    color = TextTertiary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -502,8 +528,8 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                             onClick = { selectedChunkSize = size },
                             label = { Text(label, fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = AccentPrimary.copy(alpha = 0.2f),
-                                selectedLabelColor = AccentPrimary
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         )
                     }
@@ -511,46 +537,49 @@ fun HomeScreen(viewModel: AirGapViewModel) {
             }
         }
 
-        // Specifications & Privacy Guarantee Card
+        // Settings Quick Access Bar
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            color = SurfaceDark,
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable { viewModel.navigateTo(Screen.Settings) },
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    "Transfer Architecture",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                listOf(
-                    Icons.Default.VerifiedUser to "100% Offline: zero network permissions in Manifest",
-                    Icons.Default.Memory to "Up to 10 MiB: memory-safe sequential reassembly",
-                    Icons.Default.Loop to "Continuous loop: scan receiver can join anytime",
-                    Icons.Default.Fingerprint to "SHA-256 integrity: cryptographically verified output"
-                ).forEach { (icon, text) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = AccentPrimary,
-                            modifier = Modifier.size(16.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Palette,
+                        contentDescription = "Theme",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(
+                            "Theme & Preferences",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text,
-                            fontSize = 12.sp,
-                            color = TextSecondary
+                            "Active: ${settings.themeMode.title}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Open Settings",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -587,24 +616,24 @@ fun SendScreen(viewModel: AirGapViewModel) {
                     transmitState.fileName,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     "${transmitState.fileSize / 1024} KB • ${if (transmitState.isEncrypted) "Encrypted" else "Plaintext"}",
                     fontSize = 12.sp,
-                    color = TextSecondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Surface(
-                color = AccentPrimary.copy(alpha = 0.15f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
                     "LOOPING",
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = AccentPrimary,
+                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -618,7 +647,7 @@ fun SendScreen(viewModel: AirGapViewModel) {
                 .aspectRatio(1f),
             shape = RoundedCornerShape(24.dp),
             color = Color.White,
-            border = androidx.compose.foundation.BorderStroke(3.dp, BorderSubtle)
+            border = androidx.compose.foundation.BorderStroke(3.dp, MaterialTheme.colorScheme.outline)
         ) {
             Box(
                 modifier = Modifier
@@ -633,7 +662,7 @@ fun SendScreen(viewModel: AirGapViewModel) {
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    CircularProgressIndicator(color = AccentPrimary)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -651,12 +680,12 @@ fun SendScreen(viewModel: AirGapViewModel) {
                     "Frame ${transmitState.currentFrameIndex + 1} of ${transmitState.frames.size}",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
                     "${((transmitState.currentFrameIndex + 1).toFloat() / transmitState.frames.size.coerceAtLeast(1) * 100).toInt()}%",
                     fontSize = 14.sp,
-                    color = TextSecondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             LinearProgressIndicator(
@@ -669,8 +698,8 @@ fun SendScreen(viewModel: AirGapViewModel) {
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
-                color = AccentPrimary,
-                trackColor = SurfaceVariantDark
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
         }
 
@@ -678,8 +707,8 @@ fun SendScreen(viewModel: AirGapViewModel) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
-            color = SurfaceDark,
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
             Row(
                 modifier = Modifier
@@ -692,26 +721,26 @@ fun SendScreen(viewModel: AirGapViewModel) {
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous Frame",
-                        tint = TextPrimary
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 IconButton(
                     onClick = { viewModel.toggleTransmissionPlay() },
                     modifier = Modifier
                         .size(48.dp)
-                        .background(AccentPrimary, CircleShape)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
                 ) {
                     Icon(
                         imageVector = if (transmitState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "Play/Pause",
-                        tint = BgDark
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
                 IconButton(onClick = { viewModel.nextFrame() }) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next Frame",
-                        tint = TextPrimary
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -723,15 +752,15 @@ fun SendScreen(viewModel: AirGapViewModel) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Speed:", fontSize = 12.sp, color = TextSecondary)
+            Text("Speed:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             listOf("Slow (420ms)" to 420L, "Normal (280ms)" to 280L, "Fast (180ms)" to 180L).forEach { (label, speed) ->
                 FilterChip(
                     selected = (transmitState.speedMs == speed),
                     onClick = { viewModel.setTransmissionSpeed(speed) },
                     label = { Text(label, fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AccentPrimary.copy(alpha = 0.2f),
-                        selectedLabelColor = AccentPrimary
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 )
             }
@@ -740,7 +769,10 @@ fun SendScreen(viewModel: AirGapViewModel) {
         Button(
             onClick = { viewModel.resetTransmission() },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariantDark, contentColor = TextPrimary),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ),
             shape = RoundedCornerShape(14.dp)
         ) {
             Text("Stop Transmission")
@@ -815,7 +847,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                         Text(
                             "${receiveState.totalFrames} of ${receiveState.totalFrames} chunks collected",
                             fontSize = 12.sp,
-                            color = TextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -832,13 +864,13 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     if (receiveState.session.isEmpty()) "Waiting for AirGap QR…" else "${receiveState.receivedCount} / ${receiveState.totalFrames} frames",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 if (receiveState.totalFrames > 0) {
                     Text(
                         "${(receiveState.receivedCount.toFloat() / receiveState.totalFrames * 100).toInt()}%",
                         fontSize = 14.sp,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -852,8 +884,8 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     .fillMaxWidth()
                     .height(8.dp)
                     .clip(RoundedCornerShape(4.dp)),
-                color = if (receiveState.isComplete) AccentSuccess else AccentPrimary,
-                trackColor = SurfaceVariantDark
+                color = if (receiveState.isComplete) AccentSuccess else MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
         }
 
@@ -861,8 +893,8 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                color = SurfaceDark,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -872,12 +904,12 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                         receiveState.fileName,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         "Session: ${receiveState.session.take(8)}… • ${if (receiveState.isEncrypted) "AES-256-GCM Encrypted" else "Plaintext"}",
                         fontSize = 12.sp,
-                        color = TextTertiary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -894,10 +926,6 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentPrimary,
-                            unfocusedBorderColor = BorderSubtle
-                        ),
                         shape = RoundedCornerShape(12.dp)
                     )
                 }
@@ -908,11 +936,14 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary, contentColor = BgDark),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
                     enabled = !receiveState.isDecrypting
                 ) {
                     if (receiveState.isDecrypting) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BgDark)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
                     } else {
                         Text(if (receiveState.isEncrypted) "Decrypt & Verify SHA-256" else "Reassemble & Verify SHA-256", fontWeight = FontWeight.Bold)
                     }
@@ -922,16 +953,16 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    color = SurfaceDark,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text("Integrity Verified ✓", color = AccentSuccess, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("SHA-256: ${receiveState.decodedFile!!.hash.take(16)}…", color = TextTertiary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                        Text("Size: ${receiveState.decodedFile!!.data.size / 1024} KB", color = TextSecondary, fontSize = 12.sp)
+                        Text("SHA-256: ${receiveState.decodedFile!!.hash.take(16)}…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("Size: ${receiveState.decodedFile!!.data.size / 1024} KB", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                     }
                 }
 
@@ -941,7 +972,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess, contentColor = BgDark)
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess, contentColor = Color.Black)
                 ) {
                     Icon(imageVector = Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -957,7 +988,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
             },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary)
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
         ) {
             Text("Cancel & Reset")
         }

@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- Rounded Background Card -->
+    <path
+        android:fillColor="#16191E"
+        android:pathData="M16,8 h64 a8,8 0 0 1 8,8 v64 a8,8 0 0 1 -8,8 h-64 a8,8 0 0 1 -8,-8 v-64 a8,8 0 0 1 8,-8 z" />
+
+    <!-- Shield Motif -->
+    <path
+        android:fillColor="#243010"
+        android:strokeColor="#C4F042"
+        android:strokeWidth="2.5"
+        android:pathData="M48,20 L68,28 C68,50 48,67 48,74 C48,67 28,50 28,28 Z" />
+
+    <!-- Modern Stylized A -->
+    <path
+        android:fillColor="#C4F042"
+        android:pathData="M48,30 L59,54 L52.5,54 L50.2,49 L45.8,49 L43.5,54 L37,54 Z M48,38 L46.7,45 L49.3,45 Z" />
+
+    <!-- Optical Gap / Pulse Arc -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#64D2FF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M42,59 Q48,63 54,59" />
+</vector>

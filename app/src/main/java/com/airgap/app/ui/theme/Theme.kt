@@ -4,9 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 
 @Composable
-fun AirGapTheme(content: @Composable () -> Unit) {
+fun AirGapTheme(
+    themeMode: AppThemeMode = AppThemeMode.DEFAULT,
+    content: @Composable () -> Unit
+) {
+    val colorScheme = getThemeColorScheme(themeMode)
     MaterialTheme(
-        colorScheme = AirGapColorScheme,
+        colorScheme = colorScheme,
         content = content
     )
 }
