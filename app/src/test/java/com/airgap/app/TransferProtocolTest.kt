@@ -306,8 +306,8 @@ class TransferProtocolTest {
     @Test
     fun encryptionOverheadMeasurement() {
         val source = ByteArray(1280) { (it % 256).toByte() }
-        val plainPrepared = TransferProtocol.prepare(source, "plain.zip", "application/zip", null, chunkBytes = 1280)
-        val encPrepared = TransferProtocol.prepare(source, "enc.zip", "application/zip", "strongpassphrase".toCharArray(), chunkBytes = 1280)
+        val plainPrepared = TransferProtocol.prepare(source, "testfile.zip", "application/zip", null, chunkBytes = 1280)
+        val encPrepared = TransferProtocol.prepare(source, "testfile.zip", "application/zip", "strongpassphrase".toCharArray(), chunkBytes = 1280)
 
         val plainFrameBytes = plainPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
         val encFrameBytes = encPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
@@ -315,13 +315,14 @@ class TransferProtocolTest {
         val plainFrame = TransferProtocol.parse(plainFrameBytes)
         val encFrame = TransferProtocol.parse(encFrameBytes)
 
-        // Plain frame overhead: Header without Salt/IV is ~97 bytes
+        // Plain frame overhead: Header without Salt/IV
         val plainOverhead = plainFrameBytes.size - plainFrame.payload.size
-        // Encrypted frame overhead: Plain overhead + 16 bytes Salt + 12 bytes IV + 16 bytes GCM tag
+        // Encrypted frame overhead: Header + Salt + IV + GCM tag
         val encOverhead = encFrameBytes.size - source.size
 
         // Total encryption addition: 16 (salt) + 12 (IV) + 16 (tag) = 44 bytes total per single frame
         assertEquals(44, encOverhead - plainOverhead)
+        assertEquals(44, encFrameBytes.size - plainFrameBytes.size)
         // Payload efficiency for 1,280 byte chunk is > 90%
         val efficiency = (source.size.toDouble() / encFrameBytes.size.toDouble()) * 100.0
         assertTrue("Payload efficiency should be > 90%, but was $efficiency%", efficiency > 90.0)
