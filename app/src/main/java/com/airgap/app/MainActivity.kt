@@ -573,7 +573,7 @@ fun SendScreen(viewModel: AirGapViewModel) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
-        horizontalAlignment = Alignment.CenterAlignment,
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Status header
