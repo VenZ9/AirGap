@@ -2,257 +2,964 @@ package com.airgap.app
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import androidx.activity.viewModels
+import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.common.InputImage
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.MultiFormatWriter
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
-import java.util.concurrent.Executors
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-private val Ink = Color(0xFF101114)
-private val Panel = Color(0xFF1B1D22)
-private val Lime = Color(0xFFC8FF4D)
-private val Muted = Color(0xFF9DA3AD)
+import com.airgap.app.ui.theme.*
 
 class MainActivity : ComponentActivity() {
+    private val viewModel: AirGapViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AirGapApp() }
-    }
-}
-
-@Composable
-private fun AirGapApp() {
-    val context = LocalContext.current
-    val activity = context as ComponentActivity
-    var mode by remember { mutableStateOf("home") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var passphrase by remember { mutableStateOf("") }
-    var senderFrames by remember { mutableStateOf<List<String>>(emptyList()) }
-    var fileLabel by remember { mutableStateOf("") }
-    var frameIndex by remember { mutableIntStateOf(0) }
-    val received = remember { mutableStateMapOf<Int, TransferProtocol.Frame>() }
-    var receivedName by remember { mutableStateOf("") }
-    var receivedTotal by remember { mutableIntStateOf(0) }
-    var readyToSave by remember { mutableStateOf<ByteArray?>(null) }
-    var outputName by remember { mutableStateOf("airgap-file.bin") }
-    var outputMime by remember { mutableStateOf("application/octet-stream") }
-    var saveBytes by remember { mutableStateOf<ByteArray?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        val bytes = saveBytes
-        if (uri != null && bytes != null) {
-            runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw IllegalStateException("Could not open destination") }
-                .onSuccess { error = "Saved successfully." }
-                .onFailure { error = it.message ?: "Save failed." }
-        }
-        saveBytes = null
-    }
-    val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val name = runCatching {
-                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                    if (c.moveToFirst()) c.getString(0) else "shared-file.bin"
-                } ?: "shared-file.bin"
-            }.getOrDefault("shared-file.bin")
-            val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
-            runCatching {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read file")
-                if (bytes.size > TransferProtocol.MAX_FILE_BYTES) throw IllegalArgumentException("MVP limit is 10 MiB. Choose a smaller file.")
-                if (passphrase.length < 8) throw IllegalArgumentException("Enter a passphrase of at least 8 characters first.")
-                val prepared = TransferProtocol.prepare(bytes, name, mime, passphrase.toCharArray())
-                senderFrames = prepared.frames
-                passphrase = ""
-                fileLabel = "${prepared.fileName} · ${prepared.size / 1024} KB · ${prepared.frames.size} QR frames"
-                frameIndex = 0
-                mode = "send"
-                error = null
-                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            }.onFailure { error = it.message ?: "Could not prepare file." }
+        setContent {
+            AirGapTheme {
+                AirGapMainScreen(viewModel = viewModel)
+            }
         }
     }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) { mode = "receive"; error = null } else error = "Camera permission is required to receive QR frames."
-    }
 
-    LaunchedEffect(mode, senderFrames.size) {
-        if (mode == "send" && senderFrames.isNotEmpty()) {
-            while (true) { delay(320); frameIndex = (frameIndex + 1) % senderFrames.size }
+    fun keepScreenOn(enable: Boolean) {
+        if (enable) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
-            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
-
-    MaterialTheme(colorScheme = darkColorScheme(primary = Lime, background = Ink, surface = Panel, onBackground = Color.White, onSurface = Color.White)) {
-        Column(Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(42.dp).background(Lime, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
-                    Text("A", color = Ink, fontSize = 26.sp, fontWeight = FontWeight.Black)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("AirGap", fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                    Text("OFFLINE OPTICAL TRANSFER", fontSize = 10.sp, color = Muted, letterSpacing = 1.5.sp)
-                }
-                Spacer(Modifier.weight(1f))
-                Text("● LOCAL", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-            when (mode) {
-                "home" -> {
-                    Spacer(Modifier.height(10.dp))
-                    Text("Files. Shared by light.", fontSize = 31.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
-                    Text("No network. No pairing. Just two screens and a camera.", color = Muted, fontSize = 15.sp)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(value = passphrase, onValueChange = { passphrase = it }, label = { Text("Shared passphrase (8+ characters)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    Text("Both phones must use the exact same passphrase.", color = Muted, fontSize = 12.sp)
-                    PrimaryAction("Send a file", "Choose any file") { if (passphrase.length < 8) error = "Enter a passphrase of at least 8 characters." else pickLauncher.launch(arrayOf("*/*")) }
-                    PrimaryAction("Receive a file", "Scan the sender's animated QR") {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) mode = "receive"
-                        else permissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    InfoCard("MVP limits", "Files up to 10 MiB · 360-byte chunks · AES-256-GCM per chunk · SHA-256 verification")
-                    InfoCard("Transfer reality", "Keep both screens awake and steady. QR transfers can be slow; the sender cycles frames until the receiver has them all.")
-                }
-                "send" -> {
-                    Text("TRANSMITTING", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    Text(fileLabel, color = Muted, fontSize = 13.sp)
-                    Text("Frame ${frameIndex + 1} / ${senderFrames.size}", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                    val bitmap = remember(senderFrames, frameIndex) { senderFrames.getOrNull(frameIndex)?.let { qrBitmap(it, 780) } }
-                    if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = "Animated AirGap QR frame", modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(Color.White, RoundedCornerShape(12.dp)).padding(10.dp))
-                    Text("Ask the receiver to keep scanning. Frames repeat in a loop.", color = Muted, fontSize = 13.sp)
-                    PrimaryAction("Stop transfer", "Return to home") { senderFrames = emptyList(); mode = "home"; passphrase = "" }
-                }
-                "receive" -> {
-                    Text("RECEIVE", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    Text("Point the camera at the sender's QR. Frames are collected automatically.", color = Muted, fontSize = 13.sp)
-                    CameraScanner(enabled = true, onFrame = { raw ->
-                        runCatching {
-                            val f = TransferProtocol.parse(raw)
-                            if (received.isNotEmpty() && received.values.first().session != f.session) return@runCatching
-                            if (received.isEmpty()) { receivedName = f.name; receivedTotal = f.total }
-                            if (f.total == receivedTotal) received.putIfAbsent(f.index, f)
-                        }.onFailure { /* Ignore non-AirGap QR codes and malformed frames. */ }
-                    })
-                    LinearProgressIndicator(progress = { if (receivedTotal > 0) received.size.toFloat() / receivedTotal else 0f }, modifier = Modifier.fillMaxWidth(), color = Lime)
-                    Text(if (receivedTotal > 0) "${received.size} / $receivedTotal frames · $receivedName" else "Waiting for AirGap frames…", color = Color.White)
-                    if (receivedTotal > 0 && received.size == receivedTotal) {
-                        Text("All frames captured. Enter the same passphrase used by the sender.", color = Lime, fontSize = 13.sp)
-                        OutlinedTextField(value = passphrase, onValueChange = { passphrase = it }, label = { Text("Passphrase") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                        PrimaryAction("Decrypt and verify", "Authenticate each chunk and check SHA-256") {
-                            runCatching {
-                                val (name, bytes) = TransferProtocol.decrypt(received.values.toList(), passphrase.toCharArray())
-                                passphrase = ""
-                                outputName = name.ifBlank { "airgap-file.bin" }
-                                outputMime = "application/octet-stream"
-                                readyToSave = bytes
-                                error = "Verified. Choose where to save the file."
-                            }.onFailure { error = it.message ?: "Decryption failed." }
-                        }
-                        if (readyToSave != null) PrimaryAction("Save file", outputName) {
-                            saveBytes = readyToSave
-                            saveLauncher.launch(outputName.substringAfterLast('/').take(120).ifBlank { "airgap-file.bin" })
-                            readyToSave = null
-                        }
-                    }
-                    PrimaryAction("Cancel receive", "Clear captured frames") { received.clear(); receivedTotal = 0; receivedName = ""; readyToSave = null; mode = "home" }
-                }
-            }
-            if (error != null) {
-                Text(error!!, color = if (error!!.contains("successfully") || error!!.contains("Verified")) Lime else Color(0xFFFF8A80), fontSize = 13.sp)
-                TextButton(onClick = { error = null }) { Text("Dismiss", color = Muted) }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("AIRGAP 0.1.0 · NETWORK PERMISSIONS: NONE", color = Color(0xFF666C75), fontSize = 10.sp, letterSpacing = 1.sp)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PrimaryAction(title: String, subtitle: String, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Color.White), contentPadding = PaddingValues(18.dp)) {
-        Column(Modifier.fillMaxWidth()) { Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp); Text(subtitle, color = Muted, fontSize = 12.sp) }
-    }
-}
-
-@Composable
-private fun InfoCard(title: String, body: String) {
-    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(title, color = Lime, fontWeight = FontWeight.Bold)
-        Text(body, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-    }
-}
-
-private fun qrBitmap(contents: String, size: Int): Bitmap {
-    val hints = mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M, EncodeHintType.MARGIN to 2)
-    val matrix = MultiFormatWriter().encode(contents, BarcodeFormat.QR_CODE, size, size, hints)
-    val pixels = IntArray(size * size) { i -> if (matrix[i % size, i / size]) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
-    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
-}
-
-@Composable
-private fun CameraScanner(enabled: Boolean, onFrame: (String) -> Unit) {
+fun AirGapMainScreen(viewModel: AirGapViewModel) {
     val context = LocalContext.current
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    val executor = remember { Executors.newSingleThreadExecutor() }
-    val scanner = remember { BarcodeScanning.getClient() }
-    DisposableEffect(Unit) { onDispose { scanner.close(); executor.shutdown() } }
-    AndroidView(
-        modifier = Modifier.fillMaxWidth().height(300.dp).background(Panel, RoundedCornerShape(16.dp)),
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val providerFuture = ProcessCameraProvider.getInstance(ctx)
-            providerFuture.addListener({
-                val provider = providerFuture.get()
-                val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
-                analysis.setAnalyzer(executor) { proxy ->
-                    val media = proxy.image
-                    if (media == null || !enabled) { proxy.close(); return@setAnalyzer }
-                    val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                    scanner.process(input)
-                        .addOnSuccessListener { codes -> codes.forEach { it.rawValue?.let(onFrame) } }
-                        .addOnCompleteListener { proxy.close() }
+    val activity = context as MainActivity
+    val currentScreen by viewModel.screen.collectAsState()
+    val statusMsg by viewModel.statusMessage.collectAsState()
+    val isError by viewModel.isErrorMessage.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(statusMsg) {
+        statusMsg?.let { msg ->
+            snackbarHostState.showSnackbar(
+                message = msg,
+                duration = SnackbarDuration.Short
+            )
+            viewModel.clearMessage()
+        }
+    }
+
+    LaunchedEffect(currentScreen) {
+        activity.keepScreenOn(currentScreen == Screen.Send || currentScreen == Screen.Receive)
+    }
+
+    Scaffold(
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                Snackbar(
+                    containerColor = if (isError) AccentError else SurfaceElevatedDark,
+                    contentColor = if (isError) Color.White else AccentPrimary,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(data.visuals.message, fontWeight = FontWeight.Medium)
                 }
-                try {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                } catch (_: Exception) { }
-            }, ContextCompat.getMainExecutor(ctx))
-            previewView
+            }
+        },
+        containerColor = BgDark,
+        topBar = {
+            AirGapTopBar(
+                screen = currentScreen,
+                onBack = {
+                    when (currentScreen) {
+                        Screen.Send -> viewModel.resetTransmission()
+                        Screen.Receive -> {
+                            viewModel.resetReceiver()
+                            viewModel.navigateTo(Screen.Home)
+                        }
+                        Screen.Home -> {}
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            AnimatedContent(
+                targetState = currentScreen,
+                label = "ScreenTransition"
+            ) { target ->
+                when (target) {
+                    Screen.Home -> HomeScreen(viewModel = viewModel)
+                    Screen.Send -> SendScreen(viewModel = viewModel)
+                    Screen.Receive -> ReceiveScreen(viewModel = viewModel)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AirGapTopBar(
+    screen: Screen,
+    onBack: () -> Unit
+) {
+    TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = BgDark,
+            titleContentColor = TextPrimary
+        ),
+        navigationIcon = {
+            if (screen != Screen.Home) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = TextPrimary
+                    )
+                }
+            }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(AccentPrimary, RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "AG",
+                        color = BgDark,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 14.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        "AirGap",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        "OFFLINE OPTICAL SYNC",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextTertiary,
+                        letterSpacing = 1.2.sp
+                    )
+                }
+            }
+        },
+        actions = {
+            Surface(
+                color = SurfaceVariantDark,
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(AccentSuccess, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "OFFLINE",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
         }
     )
+}
+
+@Composable
+fun HomeScreen(viewModel: AirGapViewModel) {
+    val context = LocalContext.current
+    var isEncryptionEnabled by remember { mutableStateOf(false) }
+    var passphrase by remember { mutableStateOf("") }
+    var isPassphraseVisible by remember { mutableStateOf(false) }
+    var selectedChunkSize by remember { mutableIntStateOf(TransferProtocol.DEFAULT_CHUNK_BYTES) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            if (isEncryptionEnabled && passphrase.length < 8) {
+                viewModel.showMessage("Passphrase must be at least 8 characters.", isError = true)
+                return@rememberLauncherForActivityResult
+            }
+            viewModel.prepareFileForTransmission(
+                context = context,
+                uri = uri,
+                passphrase = passphrase,
+                isEncrypted = isEncryptionEnabled,
+                chunkBytes = selectedChunkSize
+            )
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            viewModel.resetReceiver()
+            viewModel.navigateTo(Screen.Receive)
+        } else {
+            viewModel.showMessage("Camera permission is required to scan QR frames.", isError = true)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        // Hero headline
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Offline Transfer",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Text(
+                "Transfer files using sequential animated QR codes. No internet, Wi-Fi, Bluetooth, or local network required.",
+                fontSize = 14.sp,
+                color = TextSecondary,
+                lineHeight = 20.sp
+            )
+        }
+
+        // Action Cards
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Send Button Card
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable {
+                        filePickerLauncher.launch(arrayOf("*/*"))
+                    },
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(AccentPrimary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileUpload,
+                            contentDescription = "Send",
+                            tint = AccentPrimary
+                        )
+                    }
+                    Column {
+                        Text(
+                            "Send File",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            "Display animated QR",
+                            fontSize = 12.sp,
+                            color = TextTertiary
+                        )
+                    }
+                }
+            }
+
+            // Receive Button Card
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            viewModel.resetReceiver()
+                            viewModel.navigateTo(Screen.Receive)
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(AccentSecondary.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "Receive",
+                            tint = AccentSecondary
+                        )
+                    }
+                    Column {
+                        Text(
+                            "Receive",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            "Scan with camera",
+                            fontSize = 12.sp,
+                            color = TextTertiary
+                        )
+                    }
+                }
+            }
+        }
+
+        // Encryption Configuration Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Security",
+                            tint = if (isEncryptionEnabled) AccentPrimary else TextTertiary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                "Authenticated Encryption",
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                if (isEncryptionEnabled) "AES-256-GCM + PBKDF2 active" else "Plaintext with SHA-256 integrity",
+                                color = TextTertiary,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = isEncryptionEnabled,
+                        onCheckedChange = { isEncryptionEnabled = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = BgDark,
+                            checkedTrackColor = AccentPrimary,
+                            uncheckedThumbColor = TextTertiary,
+                            uncheckedTrackColor = SurfaceVariantDark
+                        )
+                    )
+                }
+
+                if (isEncryptionEnabled) {
+                    OutlinedTextField(
+                        value = passphrase,
+                        onValueChange = { passphrase = it },
+                        label = { Text("Shared Passphrase (8+ characters)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (isPassphraseVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isPassphraseVisible = !isPassphraseVisible }) {
+                                Icon(
+                                    imageVector = if (isPassphraseVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "Toggle Passphrase Visibility",
+                                    tint = TextSecondary
+                                )
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = BorderSubtle,
+                            focusedLabelColor = AccentPrimary,
+                            unfocusedLabelColor = TextTertiary
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            }
+        }
+
+        // Density / Chunk Size setting card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "QR Density",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        "QR Code Density",
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        fontSize = 14.sp
+                    )
+                }
+                Text(
+                    "Select chunk size for your display and camera resolution:",
+                    fontSize = 12.sp,
+                    color = TextTertiary
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        "Compact (240B)" to 240,
+                        "Standard (360B)" to 360,
+                        "Dense (480B)" to 480
+                    ).forEach { (label, size) ->
+                        FilterChip(
+                            selected = (selectedChunkSize == size),
+                            onClick = { selectedChunkSize = size },
+                            label = { Text(label, fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentPrimary.copy(alpha = 0.2f),
+                                selectedLabelColor = AccentPrimary
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Specifications & Privacy Guarantee Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Transfer Architecture",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                listOf(
+                    Icons.Default.VerifiedUser to "100% Offline: zero network permissions in Manifest",
+                    Icons.Default.Memory to "Up to 10 MiB: memory-safe sequential reassembly",
+                    Icons.Default.Loop to "Continuous loop: scan receiver can join anytime",
+                    Icons.Default.Fingerprint to "SHA-256 integrity: cryptographically verified output"
+                ).forEach { (icon, text) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = AccentPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text,
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SendScreen(viewModel: AirGapViewModel) {
+    val transmitState by viewModel.transmitState.collectAsState()
+    BackHandler {
+        viewModel.resetTransmission()
+    }
+
+    val currentFrameStr = transmitState.frames.getOrNull(transmitState.currentFrameIndex)
+    val qrBitmap = remember(currentFrameStr) {
+        currentFrameStr?.let { QrGenerator.generate(it, 800) }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterAlignment,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Status header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    transmitState.fileName,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${transmitState.fileSize / 1024} KB • ${if (transmitState.isEncrypted) "Encrypted" else "Plaintext"}",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            }
+            Surface(
+                color = AccentPrimary.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    "LOOPING",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = AccentPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // QR Code display container
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f),
+            shape = RoundedCornerShape(24.dp),
+            color = Color.White,
+            border = androidx.compose.foundation.BorderStroke(3.dp, BorderSubtle)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (qrBitmap != null) {
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = "Sequential QR Code Frame",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    CircularProgressIndicator(color = AccentPrimary)
+                }
+            }
+        }
+
+        // Frame index and progress bar
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Frame ${transmitState.currentFrameIndex + 1} of ${transmitState.frames.size}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Text(
+                    "${((transmitState.currentFrameIndex + 1).toFloat() / transmitState.frames.size.coerceAtLeast(1) * 100).toInt()}%",
+                    fontSize = 14.sp,
+                    color = TextSecondary
+                )
+            }
+            LinearProgressIndicator(
+                progress = {
+                    if (transmitState.frames.isNotEmpty()) {
+                        (transmitState.currentFrameIndex + 1).toFloat() / transmitState.frames.size
+                    } else 0f
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = AccentPrimary,
+                trackColor = SurfaceVariantDark
+            )
+        }
+
+        // Transmission Controls
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { viewModel.prevFrame() }) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous Frame",
+                        tint = TextPrimary
+                    )
+                }
+                IconButton(
+                    onClick = { viewModel.toggleTransmissionPlay() },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(AccentPrimary, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (transmitState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Play/Pause",
+                        tint = BgDark
+                    )
+                }
+                IconButton(onClick = { viewModel.nextFrame() }) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Next Frame",
+                        tint = TextPrimary
+                    )
+                }
+            }
+        }
+
+        // Speed Adjustment
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Speed:", fontSize = 12.sp, color = TextSecondary)
+            listOf("Slow (420ms)" to 420L, "Normal (280ms)" to 280L, "Fast (180ms)" to 180L).forEach { (label, speed) ->
+                FilterChip(
+                    selected = (transmitState.speedMs == speed),
+                    onClick = { viewModel.setTransmissionSpeed(speed) },
+                    label = { Text(label, fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AccentPrimary.copy(alpha = 0.2f),
+                        selectedLabelColor = AccentPrimary
+                    )
+                )
+            }
+        }
+
+        Button(
+            onClick = { viewModel.resetTransmission() },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariantDark, contentColor = TextPrimary),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Stop Transmission")
+        }
+    }
+}
+
+@Composable
+fun ReceiveScreen(viewModel: AirGapViewModel) {
+    val context = LocalContext.current
+    val receiveState by viewModel.receiveState.collectAsState()
+    var passphrase by remember { mutableStateOf("") }
+
+    val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destinationUri ->
+        if (destinationUri != null) {
+            viewModel.saveDecodedFile(context, destinationUri) {
+                viewModel.resetReceiver()
+                viewModel.navigateTo(Screen.Home)
+            }
+        }
+    }
+
+    BackHandler {
+        viewModel.resetReceiver()
+        viewModel.navigateTo(Screen.Home)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Camera Viewfinder (only active until all frames captured)
+        if (!receiveState.isComplete) {
+            CameraScannerView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp),
+                onQrDetected = { raw ->
+                    viewModel.onScannedQrCode(raw)
+                }
+            )
+        } else {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = AccentSuccess.copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, AccentSuccess.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Complete",
+                        tint = AccentSuccess,
+                        modifier = Modifier.size(32.dp)
+                    )
+                    Column {
+                        Text(
+                            "All Frames Captured",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentSuccess
+                        )
+                        Text(
+                            "${receiveState.totalFrames} of ${receiveState.totalFrames} chunks collected",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            }
+        }
+
+        // Progress indicators
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    if (receiveState.session.isEmpty()) "Waiting for AirGap QR…" else "${receiveState.receivedCount} / ${receiveState.totalFrames} frames",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                if (receiveState.totalFrames > 0) {
+                    Text(
+                        "${(receiveState.receivedCount.toFloat() / receiveState.totalFrames * 100).toInt()}%",
+                        fontSize = 14.sp,
+                        color = TextSecondary
+                    )
+                }
+            }
+            LinearProgressIndicator(
+                progress = {
+                    if (receiveState.totalFrames > 0) {
+                        receiveState.receivedCount.toFloat() / receiveState.totalFrames
+                    } else 0f
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = if (receiveState.isComplete) AccentSuccess else AccentPrimary,
+                trackColor = SurfaceVariantDark
+            )
+        }
+
+        if (receiveState.fileName.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        receiveState.fileName,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        "Session: ${receiveState.session.take(8)}… • ${if (receiveState.isEncrypted) "AES-256-GCM Encrypted" else "Plaintext"}",
+                        fontSize = 12.sp,
+                        color = TextTertiary
+                    )
+                }
+            }
+        }
+
+        // Actions when complete
+        if (receiveState.isComplete) {
+            if (receiveState.decodedFile == null) {
+                if (receiveState.isEncrypted) {
+                    OutlinedTextField(
+                        value = passphrase,
+                        onValueChange = { passphrase = it },
+                        label = { Text("Enter Sender's Passphrase") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = BorderSubtle
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        viewModel.completeAndReconstruct(if (receiveState.isEncrypted) passphrase else null)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary, contentColor = BgDark),
+                    enabled = !receiveState.isDecrypting
+                ) {
+                    if (receiveState.isDecrypting) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BgDark)
+                    } else {
+                        Text(if (receiveState.isEncrypted) "Decrypt & Verify SHA-256" else "Reassemble & Verify SHA-256", fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                // File decoded and verified, show Save button
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Integrity Verified ✓", color = AccentSuccess, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("SHA-256: ${receiveState.decodedFile!!.hash.take(16)}…", color = TextTertiary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("Size: ${receiveState.decodedFile!!.data.size / 1024} KB", color = TextSecondary, fontSize = 12.sp)
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        saveFileLauncher.launch(receiveState.decodedFile!!.name)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess, contentColor = BgDark)
+                ) {
+                    Icon(imageVector = Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Save to Device", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = {
+                viewModel.resetReceiver()
+                viewModel.navigateTo(Screen.Home)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary)
+        ) {
+            Text("Cancel & Reset")
+        }
+    }
 }
