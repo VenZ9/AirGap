@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -24,8 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.airgap.app.ui.theme.AccentPrimary
-import com.airgap.app.ui.theme.SurfaceDark
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -58,7 +57,7 @@ fun CameraScannerView(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(24.dp))
-            .background(SurfaceDark),
+            .background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center
     ) {
         AndroidView(
@@ -126,7 +125,7 @@ fun CameraScannerView(
         Box(
             modifier = Modifier
                 .size(230.dp)
-                .border(2.dp, AccentPrimary.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+                .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
         )
     }
 }
