@@ -614,9 +614,9 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf(
-                        "Compact (240B)" to 240,
-                        "Standard (360B)" to 360,
-                        "Dense (480B)" to 480
+                        "Compact (768B)" to 768,
+                        "Standard (1280B)" to 1280,
+                        "Dense (1800B)" to 1800
                     ).forEach { (label, size) ->
                         FilterChip(
                             selected = (selectedChunkSize == size),
@@ -905,8 +905,8 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(280.dp),
-                    onQrDetected = { raw ->
-                        viewModel.onScannedQrCode(raw)
+                    onQrDetected = { rawBytes, rawString ->
+                        viewModel.onScannedQrCode(rawBytes, rawString)
                     }
                 )
 

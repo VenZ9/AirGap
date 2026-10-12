@@ -209,9 +209,9 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(
-                            "Compact (240B)" to 240,
-                            "Standard (360B)" to 360,
-                            "Dense (480B)" to 480
+                            "Compact (768B)" to 768,
+                            "Standard (1280B)" to 1280,
+                            "Dense (1800B)" to 1800
                         ).forEach { (label, size) ->
                             FilterChip(
                                 selected = (settings.defaultChunkBytes == size),

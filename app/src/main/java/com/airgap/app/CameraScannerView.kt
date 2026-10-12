@@ -34,7 +34,7 @@ import java.util.concurrent.Executors
 @Composable
 fun CameraScannerView(
     modifier: Modifier = Modifier,
-    onQrDetected: (String) -> Unit
+    onQrDetected: (ByteArray, String?) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -92,8 +92,12 @@ fun CameraScannerView(
                             scanner.process(image)
                                 .addOnSuccessListener { barcodes ->
                                     for (barcode in barcodes) {
-                                        barcode.rawValue?.let { raw ->
-                                            onQrDetected(raw)
+                                        val rawBytes = barcode.rawBytes
+                                        val rawValue = barcode.rawValue
+                                        if (rawBytes != null && rawBytes.isNotEmpty()) {
+                                            onQrDetected(rawBytes, rawValue)
+                                        } else if (rawValue != null) {
+                                            onQrDetected(rawValue.toByteArray(Charsets.ISO_8859_1), rawValue)
                                         }
                                     }
                                 }

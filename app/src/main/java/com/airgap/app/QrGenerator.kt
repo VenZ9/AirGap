@@ -8,8 +8,14 @@ import com.google.zxing.MultiFormatWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 
 object QrGenerator {
-    private val hints = mapOf(
+    private val hintsLevelM = mapOf(
         EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+        EncodeHintType.MARGIN to 1,
+        EncodeHintType.CHARACTER_SET to "ISO-8859-1"
+    )
+
+    private val hintsLevelL = mapOf(
+        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L,
         EncodeHintType.MARGIN to 1,
         EncodeHintType.CHARACTER_SET to "ISO-8859-1"
     )
@@ -24,6 +30,8 @@ object QrGenerator {
             return cached
         }
 
+        // Use ErrorCorrectionLevel.M (15%) for robust scanning; fallback to L (7%) for ultra-dense payloads > 2100 bytes
+        val hints = if (content.length > 2100) hintsLevelL else hintsLevelM
         val matrix = MultiFormatWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
         val width = matrix.width
         val height = matrix.height

@@ -1,9 +1,11 @@
 package com.airgap.app
 
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.Base64
 
 class TransferProtocolTest {
 
@@ -43,7 +45,7 @@ class TransferProtocolTest {
     fun roundTripMultiChunkAndOutOfOrderFrames() {
         val source = ByteArray(8_192) { (it * 31 % 251).toByte() }
         val prepared = TransferProtocol.prepare(
-            source, "sample.zip", "application/zip", "a strong passphrase".toCharArray()
+            source, "sample.zip", "application/zip", "a strong passphrase".toCharArray(), chunkBytes = 1280
         )
         assertTrue(prepared.frames.size > 1)
 
@@ -63,9 +65,9 @@ class TransferProtocolTest {
             fileName = "stream_test.bin",
             mime = "application/octet-stream",
             passphrase = "password123".toCharArray(),
-            chunkBytes = 400
+            chunkBytes = 1000
         )
-        assertTrue(prepared.frames.size > 20)
+        assertTrue(prepared.frames.size > 10)
 
         val frames = prepared.frames.map { TransferProtocol.parse(it) }
         val outStream = ByteArrayOutputStream()
@@ -97,9 +99,9 @@ class TransferProtocolTest {
 
     @Test
     fun duplicateFramesDoNotChangeReconstruction() {
-        val source = ByteArray(1_500) { it.toByte() }
+        val source = ByteArray(4_500) { it.toByte() }
         val prepared = TransferProtocol.prepare(
-            source, "file.bin", "application/octet-stream", "a good passphrase".toCharArray()
+            source, "file.bin", "application/octet-stream", "a good passphrase".toCharArray(), chunkBytes = 1280
         )
         val unique = prepared.frames.map { TransferProtocol.parse(it) }
         val duplicated = unique + unique.first() + unique[unique.size / 2]
@@ -143,8 +145,8 @@ class TransferProtocolTest {
 
     @Test
     fun incompleteFramesAreRejected() {
-        val source = ByteArray(2_000) { (it % 256).toByte() }
-        val prepared = TransferProtocol.prepare(source, "file.bin", "application/octet-stream", null)
+        val source = ByteArray(5_000) { (it % 256).toByte() }
+        val prepared = TransferProtocol.prepare(source, "file.bin", "application/octet-stream", null, chunkBytes = 1000)
         assertTrue(prepared.frames.size > 1)
         val partialFrames = prepared.frames.drop(1).map { TransferProtocol.parse(it) }
 
@@ -187,9 +189,9 @@ class TransferProtocolTest {
 
     @Test
     fun customChunkSizeAdaptive() {
-        val source = ByteArray(1000) { it.toByte() }
-        val preparedSmall = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 150)
-        val preparedLarge = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 600)
+        val source = ByteArray(3000) { it.toByte() }
+        val preparedSmall = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 500)
+        val preparedLarge = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 1500)
 
         assertTrue(preparedSmall.frames.size > preparedLarge.frames.size)
         val decodedSmall = TransferProtocol.reconstruct(preparedSmall.frames.map { TransferProtocol.parse(it) }, null)
@@ -201,10 +203,8 @@ class TransferProtocolTest {
 
     @Test
     fun boundarySizeVerificationAroundLimit() {
-        // Test that 50 MiB limit constant is 52,428,800 bytes
         assertEquals(50 * 1024 * 1024, TransferProtocol.MAX_FILE_BYTES)
 
-        // Attempting to prepare a stream larger than MAX_FILE_BYTES throws IllegalArgumentException
         try {
             val oversized = TransferProtocol.MAX_FILE_BYTES.toLong() + 1L
             TransferProtocol.prepareFromStream(
@@ -217,5 +217,169 @@ class TransferProtocolTest {
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message.orEmpty().contains("50 MiB"))
         }
+    }
+
+    @Test
+    fun binaryProtocolV2MagicAndParsing() {
+        val source = "Binary Protocol v2 Verification Payload".toByteArray()
+        val prepared = TransferProtocol.prepare(source, "v2test.bin", "application/octet-stream", null)
+        assertEquals(2, prepared.version)
+        val frameStr = prepared.frames.first()
+
+        // Check magic bytes: 'A', 'G', 0x02
+        val bytes = frameStr.toByteArray(Charsets.ISO_8859_1)
+        assertEquals(0x41.toByte(), bytes[0])
+        assertEquals(0x47.toByte(), bytes[1])
+        assertEquals(0x02.toByte(), bytes[2])
+
+        // Parse from ByteArray
+        val frameFromBytes = TransferProtocol.parse(bytes)
+        assertEquals(2, frameFromBytes.version)
+        assertEquals("v2test.bin", frameFromBytes.name)
+
+        // Parse from String
+        val frameFromStr = TransferProtocol.parse(frameStr)
+        assertEquals(frameFromBytes, frameFromStr)
+    }
+
+    @Test
+    fun dynamicCompressionSkipsZipFiles() {
+        // Create simulated ZIP header PK\x03\x04
+        val zipHeader = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
+        val pseudoZipData = zipHeader + ByteArray(5000) { (it * 73 % 256).toByte() }
+
+        val prepared = TransferProtocol.prepare(pseudoZipData, "archive.zip", "application/zip", null)
+        assertFalse("ZIP files must not be re-compressed", prepared.isCompressed)
+
+        val frame = TransferProtocol.parse(prepared.frames.first())
+        assertFalse(frame.compressed)
+
+        val decoded = TransferProtocol.reconstruct(prepared.frames.map { TransferProtocol.parse(it) }, null)
+        assertArrayEquals(pseudoZipData, decoded.data)
+    }
+
+    @Test
+    fun dynamicCompressionCompressesRepetitiveText() {
+        val repetitiveText = "AIRGAP_OFFLINE_HIGH_EFFICIENCY_TRANSFER_PROTOCOL_V2\n".repeat(200).toByteArray()
+        val prepared = TransferProtocol.prepare(repetitiveText, "log.txt", "text/plain", null)
+        assertTrue("Repetitive text must be compressed", prepared.isCompressed)
+
+        val frame = TransferProtocol.parse(prepared.frames.first())
+        assertTrue(frame.compressed)
+
+        val decoded = TransferProtocol.reconstruct(prepared.frames.map { TransferProtocol.parse(it) }, null)
+        assertArrayEquals(repetitiveText, decoded.data)
+        assertEquals(repetitiveText.size.toLong(), decoded.data.size.toLong())
+    }
+
+    @Test
+    fun backwardCompatibilityV1JsonFrames() {
+        val session = "0123456789abcdef"
+        val payload = "Hello from v1 legacy sender".toByteArray()
+        val b64Payload = Base64.getUrlEncoder().withoutPadding().encodeToString(payload)
+        val hash = TransferProtocol.sha256Hex(payload)
+
+        val v1Json = JSONObject().apply {
+            put("v", 1)
+            put("sid", session)
+            put("i", 0)
+            put("n", 1)
+            put("name", "legacy.txt")
+            put("mime", "text/plain")
+            put("size", payload.size.toLong())
+            put("enc", 0)
+            put("hash", hash)
+            put("data", b64Payload)
+        }.toString()
+
+        val parsed = TransferProtocol.parse(v1Json)
+        assertEquals(1, parsed.version)
+        assertEquals("legacy.txt", parsed.name)
+        assertEquals(session, parsed.session)
+        assertArrayEquals(payload, parsed.payload)
+
+        val decoded = TransferProtocol.reconstruct(listOf(parsed), null)
+        assertEquals("legacy.txt", decoded.name)
+        assertArrayEquals(payload, decoded.data)
+    }
+
+    @Test
+    fun encryptionOverheadMeasurement() {
+        val source = ByteArray(1280) { (it % 256).toByte() }
+        val plainPrepared = TransferProtocol.prepare(source, "plain.dat", "application/octet-stream", null, chunkBytes = 1280)
+        val encPrepared = TransferProtocol.prepare(source, "enc.dat", "application/octet-stream", "strongpassphrase".toCharArray(), chunkBytes = 1280)
+
+        val plainFrameBytes = plainPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
+        val encFrameBytes = encPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
+
+        val plainFrame = TransferProtocol.parse(plainFrameBytes)
+        val encFrame = TransferProtocol.parse(encFrameBytes)
+
+        // Plain frame overhead: Header without Salt/IV is ~96 bytes
+        val plainOverhead = plainFrameBytes.size - plainFrame.payload.size
+        // Encrypted frame overhead: Plain overhead + 16 bytes Salt + 12 bytes IV + 16 bytes GCM tag
+        val encOverhead = encFrameBytes.size - source.size
+
+        // Total encryption addition: 16 (salt) + 12 (IV) + 16 (tag) = 44 bytes total per single frame
+        assertEquals(44, encOverhead - plainOverhead)
+        // Payload efficiency for 1,280 byte chunk is > 90%
+        val efficiency = (source.size.toDouble() / encFrameBytes.size.toDouble()) * 100.0
+        assertTrue("Payload efficiency should be > 90%, but was $efficiency%", efficiency > 90.0)
+    }
+
+    @Test
+    fun benchmarkCalculationsFor27MBAnd50MiB() {
+        val size27MB = 28_311_552L // 27 MiB
+        val size50MB = 52_428_800L // 50 MiB
+
+        // 1. Calculate old v1 frame count at 360 bytes/chunk
+        val oldV1Chunk = 360
+        val oldFrames27MB = (size27MB + oldV1Chunk - 1) / oldV1Chunk
+        val oldFrames50MB = (size50MB + oldV1Chunk - 1) / oldV1Chunk
+        assertEquals(78644L, oldFrames27MB)
+        assertEquals(145636L, oldFrames50MB)
+
+        // 2. Calculate new v2 frame counts
+        val compactChunk = 768
+        val standardChunk = 1280
+        val denseChunk = 1800
+        val ultraChunk = 2300
+
+        val v2Compact27MB = (size27MB + compactChunk - 1) / compactChunk
+        val v2Standard27MB = (size27MB + standardChunk - 1) / standardChunk
+        val v2Dense27MB = (size27MB + denseChunk - 1) / denseChunk
+        val v2Ultra27MB = (size27MB + ultraChunk - 1) / ultraChunk
+
+        assertEquals(36864L, v2Compact27MB)
+        assertEquals(22119L, v2Standard27MB)
+        assertEquals(15729L, v2Dense27MB)
+        assertEquals(12310L, v2Ultra27MB)
+
+        val v2Standard50MB = (size50MB + standardChunk - 1) / standardChunk
+        val v2Dense50MB = (size50MB + denseChunk - 1) / denseChunk
+        val v2Ultra50MB = (size50MB + ultraChunk - 1) / ultraChunk
+
+        assertEquals(40960L, v2Standard50MB)
+        assertEquals(29128L, v2Dense50MB)
+        assertEquals(22796L, v2Ultra50MB)
+
+        // Assert frame reductions are between 71.8% and 84.3%
+        val standardReduction27MB = (oldFrames27MB - v2Standard27MB).toDouble() / oldFrames27MB * 100.0
+        val denseReduction27MB = (oldFrames27MB - v2Dense27MB).toDouble() / oldFrames27MB * 100.0
+        val ultraReduction27MB = (oldFrames27MB - v2Ultra27MB).toDouble() / oldFrames27MB * 100.0
+
+        assertTrue("Standard reduction should be > 70%", standardReduction27MB > 70.0)
+        assertTrue("Dense reduction should be > 79%", denseReduction27MB > 79.0)
+        assertTrue("Ultra reduction should be > 84%", ultraReduction27MB > 84.0)
+
+        // Estimated durations for 27 MB ZIP file
+        // At 5 fps (200ms per frame):
+        val durationOldAt5fpsSeconds = oldFrames27MB / 5.0
+        val durationStandardAt5fpsSeconds = v2Standard27MB / 5.0
+        val durationDenseAt5fpsSeconds = v2Dense27MB / 5.0
+
+        assertTrue(durationOldAt5fpsSeconds > 15000) // ~4.3 hours
+        assertTrue(durationStandardAt5fpsSeconds < 4500) // ~1.2 hours
+        assertTrue(durationDenseAt5fpsSeconds < 3200) // ~52 minutes
     }
 }

@@ -458,10 +458,10 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
         showMessage(if (paused) "Scanning paused." else "Scanning resumed.")
     }
 
-    fun onScannedQrCode(raw: String) {
+    fun onScannedQrCode(rawBytes: ByteArray, rawString: String? = null) {
         if (_receiveState.value.isPaused || _receiveState.value.isComplete) return
         try {
-            val frame = TransferProtocol.parse(raw)
+            val frame = TransferProtocol.parse(rawBytes)
             synchronized(receivedFramesMap) {
                 val current = _receiveState.value
 
@@ -499,6 +499,10 @@ class AirGapViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {
             // Ignore non-AirGap QR codes
         }
+    }
+
+    fun onScannedQrCode(raw: String) {
+        onScannedQrCode(raw.toByteArray(Charsets.ISO_8859_1), raw)
     }
 
     fun completeAndReconstruct(passphrase: String?) {
