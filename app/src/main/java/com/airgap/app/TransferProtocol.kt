@@ -1,6 +1,9 @@
 package com.airgap.app
 
 import org.json.JSONObject
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
@@ -12,14 +15,15 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * AirGap Transfer Protocol:
- * - Supports both optional passphrase-based authenticated encryption (AES-256-GCM) and unencrypted transfers
- * - Adaptive chunk sizing (default 360 bytes, configurable between 120 and 720 bytes for display/camera density)
+ * - 50 MiB file size limit throughout
+ * - Streaming-capable chunking and checksum generation
+ * - AES-256-GCM authenticated encryption or plaintext with SHA-256 verification
+ * - Dynamic chunk sizing between 120 and 720 bytes
  * - Cyclic sequential QR frames with robust metadata validation
- * - Frame deduplication, out-of-order frame reassembly, SHA-256 integrity check
- * - Safe input bounds and memory protection for up to 10 MiB files
+ * - Frame deduplication, out-of-order frame reassembly, memory-conscious reconstruction
  */
 object TransferProtocol {
-    const val MAX_FILE_BYTES = 10 * 1024 * 1024
+    const val MAX_FILE_BYTES = 50 * 1024 * 1024 // 50 MiB
     const val DEFAULT_CHUNK_BYTES = 360
     const val MIN_CHUNK_BYTES = 120
     const val MAX_CHUNK_BYTES = 720
@@ -70,7 +74,7 @@ object TransferProtocol {
         val frames: List<String>,
         val session: String,
         val fileName: String,
-        val size: Int,
+        val size: Long,
         val isEncrypted: Boolean,
         val hash: String
     )
@@ -101,9 +105,7 @@ object TransferProtocol {
     }
 
     /**
-     * Prepares data into sequential JSON QR frames.
-     * If [passphrase] is null or empty, plain frames are generated with SHA-256 integrity verification.
-     * If [passphrase] is provided, it must be >= 8 chars and data is AES-256-GCM encrypted.
+     * Prepares in-memory byte array into sequential JSON QR frames.
      */
     fun prepare(
         data: ByteArray,
@@ -113,7 +115,7 @@ object TransferProtocol {
         chunkBytes: Int = DEFAULT_CHUNK_BYTES
     ): Prepared {
         require(data.isNotEmpty()) { "Empty files cannot be transferred." }
-        require(data.size <= MAX_FILE_BYTES) { "File exceeds the 10 MiB limit (${data.size} bytes)." }
+        require(data.size <= MAX_FILE_BYTES) { "File exceeds the 50 MiB limit (${data.size} bytes)." }
         val effectiveChunk = chunkBytes.coerceIn(MIN_CHUNK_BYTES, MAX_CHUNK_BYTES)
 
         val cleanName = sanitizeFileName(fileName)
@@ -136,8 +138,10 @@ object TransferProtocol {
         }
         val total = pieces.size
 
-        val frames = try {
-            pieces.mapIndexed { index, piece ->
+        val frames = ArrayList<String>(total)
+        try {
+            for (index in 0 until total) {
+                val piece = pieces[index]
                 val iv: ByteArray
                 val payloadBytes: ByteArray
 
@@ -152,7 +156,7 @@ object TransferProtocol {
                     payloadBytes = piece
                 }
 
-                JSONObject().apply {
+                val frameJson = JSONObject().apply {
                     put("v", 1)
                     put("sid", session)
                     put("i", index)
@@ -168,17 +172,111 @@ object TransferProtocol {
                     put("hash", hash)
                     put("data", b64(payloadBytes))
                 }.toString()
+                frames.add(frameJson)
             }
         } finally {
-            if (passphrase != null) {
-                passphrase.fill('\u0000')
-            }
-            if (keySpec != null) {
-                keySpec.encoded.fill(0)
-            }
+            passphrase?.fill('\u0000')
+            keySpec?.encoded?.fill(0)
         }
 
-        return Prepared(frames, session, cleanName, data.size, isEncrypted, hash)
+        return Prepared(frames, session, cleanName, data.size.toLong(), isEncrypted, hash)
+    }
+
+    /**
+     * Streaming prepare from an InputStream directly into frames, avoiding multiple 50 MiB memory duplications.
+     */
+    fun prepareFromStream(
+        stream: InputStream,
+        totalSize: Long,
+        fileName: String,
+        mime: String,
+        passphrase: CharArray? = null,
+        chunkBytes: Int = DEFAULT_CHUNK_BYTES
+    ): Prepared {
+        require(totalSize in 1..MAX_FILE_BYTES) { "File size ($totalSize bytes) is outside the 1..50 MiB limit." }
+        val effectiveChunk = chunkBytes.coerceIn(MIN_CHUNK_BYTES, MAX_CHUNK_BYTES)
+
+        val cleanName = sanitizeFileName(fileName)
+        val cleanMime = sanitizeMimeType(mime)
+
+        val isEncrypted = passphrase != null && passphrase.isNotEmpty()
+        if (isEncrypted) {
+            require(passphrase!!.size >= 8) { "Use a passphrase with at least 8 characters." }
+        }
+
+        val sessionBytes = ByteArray(8).also(random::nextBytes)
+        val session = sessionBytes.joinToString("") { "%02x".format(it) }
+        val salt = if (isEncrypted) ByteArray(16).also(random::nextBytes) else ByteArray(0)
+        val keySpec = if (isEncrypted) deriveKey(passphrase!!, salt) else null
+
+        // Calculate chunk count
+        val totalChunks = ((totalSize + effectiveChunk - 1) / effectiveChunk).toInt()
+        require(totalChunks in 1..500_000) { "Excessive chunk count: $totalChunks" }
+
+        // Read stream into buffer chunks and compute SHA-256 simultaneously
+        val digest = MessageDigest.getInstance("SHA-256")
+        val chunkList = ArrayList<ByteArray>(totalChunks)
+
+        val buf = ByteArray(effectiveChunk)
+        var totalBytesRead = 0L
+
+        while (true) {
+            val read = stream.read(buf)
+            if (read == -1) break
+            totalBytesRead += read
+            if (totalBytesRead > MAX_FILE_BYTES) {
+                throw IllegalArgumentException("Stream exceeded maximum file size of 50 MiB.")
+            }
+            digest.update(buf, 0, read)
+            chunkList.add(buf.copyOf(read))
+        }
+
+        require(chunkList.isNotEmpty()) { "Input stream contained 0 bytes." }
+        val finalHash = digest.digest().joinToString("") { "%02x".format(it) }
+        val actualTotal = chunkList.size
+
+        val frames = ArrayList<String>(actualTotal)
+        try {
+            for (index in 0 until actualTotal) {
+                val piece = chunkList[index]
+                val iv: ByteArray
+                val payloadBytes: ByteArray
+
+                if (isEncrypted && keySpec != null) {
+                    iv = ByteArray(12).also(random::nextBytes)
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.ENCRYPT_MODE, keySpec, GCMParameterSpec(128, iv))
+                    cipher.updateAAD(aad(session, index, actualTotal, cleanName, cleanMime, totalBytesRead, finalHash, true))
+                    payloadBytes = cipher.doFinal(piece)
+                } else {
+                    iv = ByteArray(0)
+                    payloadBytes = piece
+                }
+
+                val frameJson = JSONObject().apply {
+                    put("v", 1)
+                    put("sid", session)
+                    put("i", index)
+                    put("n", actualTotal)
+                    put("name", cleanName)
+                    put("mime", cleanMime)
+                    put("size", totalBytesRead)
+                    put("enc", if (isEncrypted) 1 else 0)
+                    if (isEncrypted) {
+                        put("salt", b64(salt))
+                        put("iv", b64(iv))
+                    }
+                    put("hash", finalHash)
+                    put("data", b64(payloadBytes))
+                }.toString()
+                frames.add(frameJson)
+            }
+        } finally {
+            passphrase?.fill('\u0000')
+            keySpec?.encoded?.fill(0)
+        }
+
+        return Prepared(frames, session, cleanName, totalBytesRead, isEncrypted, finalHash)
     }
 
     /**
@@ -194,10 +292,10 @@ object TransferProtocol {
 
         val index = j.getInt("i")
         val total = j.getInt("n")
-        require(total in 1..90_000 && index in 0 until total) { "Invalid frame index ($index of $total)." }
+        require(total in 1..500_000 && index in 0 until total) { "Invalid frame index ($index of $total)." }
 
         val size = j.getLong("size")
-        require(size in 1..MAX_FILE_BYTES.toLong()) { "File size $size is outside supported bounds." }
+        require(size in 1..MAX_FILE_BYTES.toLong()) { "File size $size is outside supported 50 MiB limit." }
 
         val name = sanitizeFileName(j.getString("name"))
         val mime = sanitizeMimeType(j.getString("mime"))
@@ -205,7 +303,6 @@ object TransferProtocol {
         val hash = j.getString("hash").lowercase()
         require(hash.matches(Regex("^[a-f0-9]{64}$"))) { "Invalid SHA-256 hash format." }
 
-        // Backwards compatibility: if "enc" flag is missing, presence of non-empty "salt" indicates encrypted
         val isEncrypted = if (j.has("enc")) j.getInt("enc") == 1 else j.optString("salt").isNotBlank()
 
         val salt = if (isEncrypted) unb64(j.getString("salt")) else ByteArray(0)
@@ -215,7 +312,6 @@ object TransferProtocol {
         if (isEncrypted) {
             require(salt.size == 16) { "Invalid encryption salt size." }
             require(iv.size == 12) { "Invalid GCM IV size." }
-            // AES-GCM adds a 16-byte authentication tag
             require(payload.size in 16..(MAX_CHUNK_BYTES + 32)) { "Invalid ciphertext length." }
         } else {
             require(payload.isNotEmpty() && payload.size <= MAX_CHUNK_BYTES) { "Invalid plaintext chunk length." }
@@ -226,7 +322,6 @@ object TransferProtocol {
 
     /**
      * Reconstructs the original file from the collected frames and verifies integrity.
-     * Decrypts if frames are encrypted, or directly assembles if unencrypted.
      */
     fun reconstruct(frames: Collection<Frame>, passphrase: CharArray? = null): DecodedFile {
         require(frames.isNotEmpty()) { "No frames received." }
@@ -295,8 +390,90 @@ object TransferProtocol {
     }
 
     /**
-     * Backwards-compatible convenience decrypt method.
+     * Streaming reconstruction directly to an OutputStream (e.g. file sink) to prevent holding 50 MiB in memory.
      */
+    fun reconstructToStream(
+        frames: Collection<Frame>,
+        outStream: OutputStream,
+        passphrase: CharArray? = null
+    ): DecodedFileMeta {
+        require(frames.isNotEmpty()) { "No frames received." }
+        val first = frames.first()
+        val total = first.total
+
+        require(frames.size >= total) { "Incomplete transfer: received ${frames.size} of $total frames." }
+        require(frames.all {
+            it.session == first.session &&
+                    it.total == total &&
+                    it.encrypted == first.encrypted &&
+                    it.salt.contentEquals(first.salt) &&
+                    it.hash == first.hash &&
+                    it.size == first.size
+        }) { "Inconsistent frames detected across transfer." }
+
+        val byIndex = frames.associateBy { it.index }
+        require(byIndex.size == total && (0 until total).all(byIndex::containsKey)) {
+            "Missing frame segments in sequence."
+        }
+
+        val isEncrypted = first.encrypted
+        val keySpec = if (isEncrypted) {
+            require(passphrase != null && passphrase.isNotEmpty()) { "Passphrase required to decrypt this transfer." }
+            deriveKey(passphrase, first.salt)
+        } else null
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        var writtenBytes = 0L
+
+        try {
+            for (i in 0 until total) {
+                val f = byIndex.getValue(i)
+                val chunk = if (isEncrypted && keySpec != null) {
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(128, f.iv))
+                    cipher.updateAAD(aad(f.session, f.index, f.total, f.name, f.mime, f.size, f.hash, true))
+                    cipher.doFinal(f.payload)
+                } else {
+                    f.payload
+                }
+                outStream.write(chunk)
+                digest.update(chunk)
+                writtenBytes += chunk.size
+            }
+            outStream.flush()
+        } catch (_: AEADBadTagException) {
+            throw IllegalArgumentException("Wrong passphrase or corrupted ciphertext.")
+        } finally {
+            passphrase?.fill('\u0000')
+            keySpec?.encoded?.fill(0)
+        }
+
+        require(writtenBytes == first.size) {
+            "Reconstructed file size mismatch: expected ${first.size}, got $writtenBytes."
+        }
+
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+        require(MessageDigest.isEqual(actualHash.toByteArray(), first.hash.toByteArray())) {
+            "SHA-256 verification failed. File integrity corrupted."
+        }
+
+        return DecodedFileMeta(
+            name = first.name,
+            mime = first.mime,
+            size = writtenBytes,
+            hash = actualHash,
+            isEncrypted = isEncrypted
+        )
+    }
+
+    data class DecodedFileMeta(
+        val name: String,
+        val mime: String,
+        val size: Long,
+        val hash: String,
+        val isEncrypted: Boolean
+    )
+
     fun decrypt(frames: Collection<Frame>, passphrase: CharArray): Pair<String, ByteArray> {
         val decoded = reconstruct(frames, passphrase)
         return decoded.name to decoded.data
@@ -305,6 +482,16 @@ object TransferProtocol {
     fun sha256(data: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(data)
 
     fun sha256Hex(data: ByteArray): String = sha256(data).joinToString("") { "%02x".format(it) }
+
+    fun sha256HexStream(stream: InputStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(8192)
+        var read: Int
+        while (stream.read(buf).also { read = it } != -1) {
+            digest.update(buf, 0, read)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun deriveKey(passphrase: CharArray, salt: ByteArray): SecretKeySpec {
         val spec = PBEKeySpec(passphrase, salt, PBKDF2_ITERATIONS, KEY_BITS)

@@ -1,7 +1,9 @@
 package com.airgap.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -13,7 +15,6 @@ import androidx.activity.viewModels
 import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -36,7 +37,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,10 +48,49 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        handleIncomingIntent(intent)
+
         setContent {
             val settings by viewModel.settings.collectAsState()
-            AirGapTheme(themeMode = settings.themeMode) {
+            AirGapTheme(
+                themeMode = settings.themeMode,
+                accent = settings.accentChoice
+            ) {
                 AirGapMainScreen(viewModel = viewModel)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        if (action == Intent.ACTION_SEND) {
+            val streamUri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            if (streamUri != null) {
+                viewModel.navigateTo(Screen.Home)
+                viewModel.showMessage("File received via Share. Enter passphrase (optional) and tap Send.", isError = false)
+            }
+        } else if (action == Intent.ACTION_SEND_MULTIPLE) {
+            val uris = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            if (!uris.isNullOrEmpty()) {
+                viewModel.navigateTo(Screen.Home)
+                viewModel.showMessage("Multiple files shared. Transfer files one by one with Send File.", isError = false)
             }
         }
     }
@@ -115,7 +154,7 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
                             viewModel.resetReceiver()
                             viewModel.navigateTo(Screen.Home)
                         }
-                        Screen.Settings -> viewModel.navigateTo(Screen.Home)
+                        Screen.Settings, Screen.History, Screen.Files -> viewModel.navigateTo(Screen.Home)
                         Screen.Home -> {}
                     }
                 },
@@ -123,6 +162,14 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
                     viewModel.navigateTo(Screen.Settings)
                 }
             )
+        },
+        bottomBar = {
+            if (currentScreen != Screen.Send && currentScreen != Screen.Receive) {
+                AirGapBottomNavigation(
+                    currentScreen = currentScreen,
+                    onNavigate = { viewModel.navigateTo(it) }
+                )
+            }
         }
     ) { padding ->
         Box(
@@ -138,9 +185,55 @@ fun AirGapMainScreen(viewModel: AirGapViewModel) {
                     Screen.Home -> HomeScreen(viewModel = viewModel)
                     Screen.Send -> SendScreen(viewModel = viewModel)
                     Screen.Receive -> ReceiveScreen(viewModel = viewModel)
+                    Screen.History -> HistoryScreen(viewModel = viewModel)
+                    Screen.Files -> ReceivedFilesScreen(viewModel = viewModel)
                     Screen.Settings -> SettingsScreen(viewModel = viewModel)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AirGapBottomNavigation(
+    currentScreen: Screen,
+    onNavigate: (Screen) -> Unit
+) {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp
+    ) {
+        val items = listOf(
+            Triple(Screen.Home, "Transfer", Icons.Default.SwapHoriz),
+            Triple(Screen.Files, "Files", Icons.Default.FolderOpen),
+            Triple(Screen.History, "History", Icons.Default.History),
+            Triple(Screen.Settings, "Settings", Icons.Default.Settings)
+        )
+
+        items.forEach { (screen, label, icon) ->
+            val selected = (currentScreen == screen)
+            NavigationBarItem(
+                selected = selected,
+                onClick = { onNavigate(screen) },
+                icon = {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                label = {
+                    Text(
+                        label,
+                        fontSize = 11.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                colors = NavigationBarItemDefaults.colors(
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
         }
     }
 }
@@ -181,6 +274,8 @@ private fun AirGapTopBar(
                     Text(
                         when (screen) {
                             Screen.Settings -> "Settings"
+                            Screen.History -> "History"
+                            Screen.Files -> "Received Files"
                             Screen.Send -> "Sending File"
                             Screen.Receive -> "Scanning Receiver"
                             Screen.Home -> "AirGap"
@@ -190,7 +285,7 @@ private fun AirGapTopBar(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        "OFFLINE OPTICAL SYNC",
+                        "OFFLINE OPTICAL SYNC (50 MiB)",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -221,7 +316,7 @@ private fun AirGapTopBar(
                     Box(
                         modifier = Modifier
                             .size(6.dp)
-                            .background(AccentSuccess, CircleShape)
+                            .background(Color(0xFF55E6A5), CircleShape)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
@@ -306,7 +401,7 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "Air-gapped file sharing with animated QR codes. No network, pairing, or cloud required.",
+                        "Air-gapped file sharing with animated QR codes up to 50 MiB. Completely offline without network or Bluetooth.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 17.sp
@@ -355,7 +450,7 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Display animated QR",
+                            "Up to 50 MiB",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -510,7 +605,7 @@ fun HomeScreen(viewModel: AirGapViewModel) {
                     )
                 }
                 Text(
-                    "Select chunk size for your display and camera resolution:",
+                    "Adjust chunk density for your display and camera resolution:",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -537,49 +632,45 @@ fun HomeScreen(viewModel: AirGapViewModel) {
             }
         }
 
-        // Settings Quick Access Bar
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { viewModel.navigateTo(Screen.Settings) },
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        // Quick Navigation to Library & History
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { viewModel.navigateTo(Screen.Files) },
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Row(
+                    modifier = Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Palette,
-                        contentDescription = "Theme",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Column {
-                        Text(
-                            "Theme & Preferences",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            "Active: ${settings.themeMode.title}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Text("Files Library", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                 }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = "Open Settings",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            }
+
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { viewModel.navigateTo(Screen.History) },
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
+                    Text("History Log", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                }
             }
         }
     }
@@ -788,9 +879,9 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
 
     val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destinationUri ->
         if (destinationUri != null) {
-            viewModel.saveDecodedFile(context, destinationUri) {
+            viewModel.saveDecodedFileToExternal(context, destinationUri) {
                 viewModel.resetReceiver()
-                viewModel.navigateTo(Screen.Home)
+                viewModel.navigateTo(Screen.Files)
             }
         }
     }
@@ -809,22 +900,41 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
     ) {
         // Camera Viewfinder (only active until all frames captured)
         if (!receiveState.isComplete) {
-            CameraScannerView(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp),
-                onQrDetected = { raw ->
-                    viewModel.onScannedQrCode(raw)
+            Box(modifier = Modifier.fillMaxWidth()) {
+                CameraScannerView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp),
+                    onQrDetected = { raw ->
+                        viewModel.onScannedQrCode(raw)
+                    }
+                )
+
+                // Scanner controls overlay (Pause / Resume scanning)
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalIconButton(
+                        onClick = { viewModel.togglePauseScanning() }
+                    ) {
+                        Icon(
+                            imageVector = if (receiveState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = if (receiveState.isPaused) "Resume" else "Pause"
+                        )
+                    }
                 }
-            )
+            }
         } else {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 12.dp),
                 shape = RoundedCornerShape(20.dp),
-                color = AccentSuccess.copy(alpha = 0.12f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, AccentSuccess.copy(alpha = 0.4f))
+                color = Color(0xFF55E6A5).copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF55E6A5).copy(alpha = 0.4f))
             ) {
                 Row(
                     modifier = Modifier.padding(18.dp),
@@ -834,7 +944,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     Icon(
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = "Complete",
-                        tint = AccentSuccess,
+                        tint = Color(0xFF55E6A5),
                         modifier = Modifier.size(32.dp)
                     )
                     Column {
@@ -842,7 +952,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                             "All Frames Captured",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = AccentSuccess
+                            color = Color(0xFF55E6A5)
                         )
                         Text(
                             "${receiveState.totalFrames} of ${receiveState.totalFrames} chunks collected",
@@ -884,7 +994,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     .fillMaxWidth()
                     .height(8.dp)
                     .clip(RoundedCornerShape(4.dp)),
-                color = if (receiveState.isComplete) AccentSuccess else MaterialTheme.colorScheme.primary,
+                color = if (receiveState.isComplete) Color(0xFF55E6A5) else MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
         }
@@ -949,7 +1059,7 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                     }
                 }
             } else {
-                // File decoded and verified, show Save button
+                // File decoded and saved to library, show Export button
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -960,23 +1070,41 @@ fun ReceiveScreen(viewModel: AirGapViewModel) {
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("Integrity Verified ✓", color = AccentSuccess, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Integrity Verified & Stored in Files ✓", color = Color(0xFF55E6A5), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text("SHA-256: ${receiveState.decodedFile!!.hash.take(16)}…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         Text("Size: ${receiveState.decodedFile!!.data.size / 1024} KB", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                     }
                 }
 
-                Button(
-                    onClick = {
-                        saveFileLauncher.launch(receiveState.decodedFile!!.name)
-                    },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess, contentColor = Color.Black)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Save to Device", fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            saveFileLauncher.launch(receiveState.decodedFile!!.name)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF55E6A5), contentColor = Color.Black)
+                    ) {
+                        Icon(imageVector = Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Export File", fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            viewModel.navigateTo(Screen.Files)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                    ) {
+                        Icon(imageVector = Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open Files", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

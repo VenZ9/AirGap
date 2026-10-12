@@ -2,7 +2,8 @@ package com.airgap.app
 
 import org.junit.Assert.*
 import org.junit.Test
-import java.util.Random
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 
 class TransferProtocolTest {
 
@@ -50,6 +51,34 @@ class TransferProtocolTest {
         val decoded = TransferProtocol.reconstruct(frames, "a strong passphrase".toCharArray())
         assertEquals("sample.zip", decoded.name)
         assertArrayEquals(source, decoded.data)
+    }
+
+    @Test
+    fun roundTripStreamingPrepareAndReconstruct() {
+        val source = ByteArray(12_000) { (it * 17 % 256).toByte() }
+        val inStream = ByteArrayInputStream(source)
+        val prepared = TransferProtocol.prepareFromStream(
+            stream = inStream,
+            totalSize = source.size.toLong(),
+            fileName = "stream_test.bin",
+            mime = "application/octet-stream",
+            passphrase = "password123".toCharArray(),
+            chunkBytes = 400
+        )
+        assertTrue(prepared.frames.size > 20)
+
+        val frames = prepared.frames.map { TransferProtocol.parse(it) }
+        val outStream = ByteArrayOutputStream()
+        val meta = TransferProtocol.reconstructToStream(
+            frames = frames,
+            outStream = outStream,
+            passphrase = "password123".toCharArray()
+        )
+
+        assertEquals("stream_test.bin", meta.name)
+        assertEquals(source.size.toLong(), meta.size)
+        assertEquals(prepared.hash, meta.hash)
+        assertArrayEquals(source, outStream.toByteArray())
     }
 
     @Test
@@ -168,5 +197,25 @@ class TransferProtocolTest {
 
         assertArrayEquals(source, decodedSmall.data)
         assertArrayEquals(source, decodedLarge.data)
+    }
+
+    @Test
+    fun boundarySizeVerificationAroundLimit() {
+        // Test that 50 MiB limit constant is 52,428,800 bytes
+        assertEquals(50 * 1024 * 1024, TransferProtocol.MAX_FILE_BYTES)
+
+        // Attempting to prepare a stream larger than MAX_FILE_BYTES throws IllegalArgumentException
+        try {
+            val oversized = TransferProtocol.MAX_FILE_BYTES.toLong() + 1L
+            TransferProtocol.prepareFromStream(
+                stream = ByteArrayInputStream(ByteArray(10)),
+                totalSize = oversized,
+                fileName = "too_big.iso",
+                mime = "application/x-iso9660-image"
+            )
+            fail("Files exceeding 50 MiB must be rejected")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("50 MiB"))
+        }
     }
 }

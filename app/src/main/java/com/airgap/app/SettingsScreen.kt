@@ -5,6 +5,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +24,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.airgap.app.ui.theme.AccentColorChoice
 import com.airgap.app.ui.theme.AppThemeMode
 
 @Composable
@@ -55,13 +58,13 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(
-                        "AirGap v0.1.0",
+                        "AirGap v0.2.0",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "Offline Optical Data Transfer",
+                        "Offline Optical Data Transfer (50 MiB)",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -78,9 +81,9 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
 
         // Section: Appearance & Themes
         SettingsSection(title = "Appearance & Themes", icon = Icons.Default.Palette) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
-                    "Select visual theme mode:",
+                    "Theme Style:",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -125,6 +128,51 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                         }
                     }
                 }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // Accent Color Selector
+                Text(
+                    "Accent Color Palette:",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(AccentColorChoice.entries) { choice ->
+                        val isChosen = (settings.accentChoice == choice)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { viewModel.updateAccent(choice) }
+                                .padding(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .background(choice.primary, CircleShape)
+                                    .then(
+                                        if (isChosen) Modifier.padding(3.dp).background(MaterialTheme.colorScheme.surface, CircleShape) else Modifier
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isChosen) {
+                                    Box(modifier = Modifier.size(24.dp).background(choice.primary, CircleShape))
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                choice.title,
+                                fontSize = 10.sp,
+                                color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -152,7 +200,7 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                         )
                     }
                     Text(
-                        "Larger chunks mean fewer frames but require sharper camera focus.",
+                        "Larger chunks mean fewer frames for up to 50 MiB files, but require steady camera focus.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -238,7 +286,7 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Repeats frames indefinitely until dismissed so receiver never misses chunks",
+                            "Cycles frames continuously so receiver can connect at any moment",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -246,6 +294,33 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                     Switch(
                         checked = settings.loopContinuous,
                         onCheckedChange = { viewModel.updateLoopContinuous(it) }
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // Haptic Feedback Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Haptic Touch Feedback",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Vibrates subtly when new QR frames are captured or controls tapped",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.hapticFeedback,
+                        onCheckedChange = { viewModel.updateHapticFeedback(it) }
                     )
                 }
 
@@ -265,7 +340,7 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Prevents screen timeout during transmission and camera reception",
+                            "Prevents screen dimming during large 50 MiB file transfers",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -278,9 +353,9 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
             }
         }
 
-        // Section: Security & Privacy Guarantee
-        SettingsSection(title = "Security & Privacy", icon = Icons.Default.Security) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Section: Security, Privacy & Retention
+        SettingsSection(title = "Privacy, Security & Retention", icon = Icons.Default.Security) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -307,14 +382,81 @@ fun SettingsScreen(viewModel: AirGapViewModel) {
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
 
+                // Hide File Names in History
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Mask Filenames in History",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Obscures file titles in transfer history logs for extra privacy",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.hideFileNamesInHistory,
+                        onCheckedChange = { viewModel.updateHideFileNames(it) }
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // Auto Cleanup Period
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Automatic History Cleanup",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            if (settings.autoCleanupDays == 0) "Never" else "${settings.autoCleanupDays} days",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("Never" to 0, "7 Days" to 7, "30 Days" to 30, "90 Days" to 90).forEach { (label, days) ->
+                            FilterChip(
+                                selected = (settings.autoCleanupDays == days),
+                                onClick = { viewModel.updateAutoCleanupDays(days) },
+                                label = { Text(label, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
                 Text(
-                    "Offline Guarantee",
+                    "Offline Zero-Network Guarantee",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    "AirGap contains 0 networking code, 0 trackers, and 0 third-party analytics. Only camera permission is requested for scanning QR frames.",
+                    "AirGap operates 100% locally. Zero network permissions, zero cloud calls, zero accounts, and zero analytic trackers. Passphrases are never saved to history or disk.",
                     fontSize = 11.sp,
                     lineHeight = 16.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
