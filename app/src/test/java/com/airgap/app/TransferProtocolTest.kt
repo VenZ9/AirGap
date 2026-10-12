@@ -62,12 +62,12 @@ class TransferProtocolTest {
         val prepared = TransferProtocol.prepareFromStream(
             stream = inStream,
             totalSize = source.size.toLong(),
-            fileName = "stream_test.bin",
-            mime = "application/octet-stream",
+            fileName = "stream_test.zip",
+            mime = "application/zip",
             passphrase = "password123".toCharArray(),
-            chunkBytes = 1000
+            chunkBytes = 400
         )
-        assertTrue(prepared.frames.size > 10)
+        assertTrue(prepared.frames.size > 20)
 
         val frames = prepared.frames.map { TransferProtocol.parse(it) }
         val outStream = ByteArrayOutputStream()
@@ -77,7 +77,7 @@ class TransferProtocolTest {
             passphrase = "password123".toCharArray()
         )
 
-        assertEquals("stream_test.bin", meta.name)
+        assertEquals("stream_test.zip", meta.name)
         assertEquals(source.size.toLong(), meta.size)
         assertEquals(prepared.hash, meta.hash)
         assertArrayEquals(source, outStream.toByteArray())
@@ -146,7 +146,7 @@ class TransferProtocolTest {
     @Test
     fun incompleteFramesAreRejected() {
         val source = ByteArray(5_000) { (it % 256).toByte() }
-        val prepared = TransferProtocol.prepare(source, "file.bin", "application/octet-stream", null, chunkBytes = 1000)
+        val prepared = TransferProtocol.prepare(source, "file.zip", "application/zip", null, chunkBytes = 1000)
         assertTrue(prepared.frames.size > 1)
         val partialFrames = prepared.frames.drop(1).map { TransferProtocol.parse(it) }
 
@@ -190,8 +190,8 @@ class TransferProtocolTest {
     @Test
     fun customChunkSizeAdaptive() {
         val source = ByteArray(3000) { it.toByte() }
-        val preparedSmall = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 500)
-        val preparedLarge = TransferProtocol.prepare(source, "data.bin", "application/octet-stream", null, chunkBytes = 1500)
+        val preparedSmall = TransferProtocol.prepare(source, "data.zip", "application/zip", null, chunkBytes = 500)
+        val preparedLarge = TransferProtocol.prepare(source, "data.zip", "application/zip", null, chunkBytes = 1500)
 
         assertTrue(preparedSmall.frames.size > preparedLarge.frames.size)
         val decodedSmall = TransferProtocol.reconstruct(preparedSmall.frames.map { TransferProtocol.parse(it) }, null)
@@ -306,8 +306,8 @@ class TransferProtocolTest {
     @Test
     fun encryptionOverheadMeasurement() {
         val source = ByteArray(1280) { (it % 256).toByte() }
-        val plainPrepared = TransferProtocol.prepare(source, "plain.dat", "application/octet-stream", null, chunkBytes = 1280)
-        val encPrepared = TransferProtocol.prepare(source, "enc.dat", "application/octet-stream", "strongpassphrase".toCharArray(), chunkBytes = 1280)
+        val plainPrepared = TransferProtocol.prepare(source, "plain.zip", "application/zip", null, chunkBytes = 1280)
+        val encPrepared = TransferProtocol.prepare(source, "enc.zip", "application/zip", "strongpassphrase".toCharArray(), chunkBytes = 1280)
 
         val plainFrameBytes = plainPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
         val encFrameBytes = encPrepared.frames.first().toByteArray(Charsets.ISO_8859_1)
@@ -315,7 +315,7 @@ class TransferProtocolTest {
         val plainFrame = TransferProtocol.parse(plainFrameBytes)
         val encFrame = TransferProtocol.parse(encFrameBytes)
 
-        // Plain frame overhead: Header without Salt/IV is ~96 bytes
+        // Plain frame overhead: Header without Salt/IV is ~97 bytes
         val plainOverhead = plainFrameBytes.size - plainFrame.payload.size
         // Encrypted frame overhead: Plain overhead + 16 bytes Salt + 12 bytes IV + 16 bytes GCM tag
         val encOverhead = encFrameBytes.size - source.size
