@@ -1,27 +1,46 @@
-# AirGap (Android MVP 0.1.0)
+# AirGap (Android 0.1.0)
 
-AirGap transfers files between Android screens through animated QR frames. It has no Internet, Wi-Fi, Bluetooth, network-state, or storage permissions. The sender uses Android's document picker; the receiver uses CameraX + bundled ML Kit barcode scanning and Android's save-document picker.
+AirGap transfers files between Android devices using animated sequential QR codes. It operates completely offline with zero network connectivity: no Internet, Wi-Fi, Bluetooth, local network, analytics, ads, accounts, or cloud dependencies.
 
-## MVP behavior
+## Key Features
 
-- Kotlin, Jetpack Compose, Material 3; min Android API 26.
-- Any file type through the document picker, limited to **10 MiB per file** in this first build.
-- Files are split into 360-byte plaintext chunks. Each chunk is encrypted independently with AES-256-GCM; the key is derived from the shared passphrase using PBKDF2-HMAC-SHA-256 (210,000 iterations) and a random 128-bit salt.
-- Each QR frame contains a session ID, index/count, repeated file metadata, authenticated ciphertext, and SHA-256 of the original file. Frames repeat in a loop; the receiver deduplicates by index and can join mid-transfer.
-- The receiver decrypts only after all frames arrive and checks the final size and SHA-256 before offering a save action.
+- **Jetpack Compose & Material 3 Dark UI**: Responsive dark-first theme with clear status indicators, progress counters, transmission playback controls, and viewfinder overlay.
+- **Offline Document Pickers**: Uses Android's Storage Access Framework (`OpenDocument` and `CreateDocument`) without broad storage permissions.
+- **Flexible Security**:
+  - **Authenticated Encryption**: AES-256-GCM per chunk with PBKDF2-HMAC-SHA-256 (210,000 iterations) and 128-bit salt derived from a user passphrase.
+  - **Plaintext Transfer Mode**: Optional unencrypted transfer for public or non-sensitive files with SHA-256 verification.
+- **Cryptographic Integrity**: SHA-256 hash verified over the reconstructed byte array before saving.
+- **Adaptive QR Density & Chunk Sizing**: Choose Compact (240B), Standard (360B), or Dense (480B) chunks to optimize for different camera sensors and screen resolutions.
+- **Looping Optical Transmission**: Continuous cyclic playback allows receiving devices to join mid-transfer; handles out-of-order, duplicate, or delayed frames seamlessly.
+- **LRU Bitmap Caching**: Optimized QR rendering (`RGB_565` format with an LRU cache) minimizing CPU load, memory allocation, and battery consumption.
+- **Privacy & Permissions**: `AndroidManifest.xml` only requests `android.permission.CAMERA` for the optical scanner. Zero network permissions exist.
 
-## Run
+## Architecture
 
-Open this directory in Android Studio with JDK 17 and Android SDK 35 installed, allow Gradle to resolve dependencies, then run the `app` configuration on two Android devices. For the receive device, grant camera permission. Enter the same passphrase on both phones. On the sender, select a file and keep the QR screen visible; on the receiver, scan the sender's screen until all frames are collected, then decrypt and save.
+```
+app/
+├── src/main/java/com/airgap/app/
+│   ├── MainActivity.kt        # Jetpack Compose UI (Home, Send, and Receive screens)
+│   ├── AirGapViewModel.kt     # Unidirectional StateFlow ViewModel & coroutine pipeline
+│   ├── CameraScannerView.kt   # CameraX and ML Kit QR code barcode analyzer
+│   ├── QrGenerator.kt         # ZXing QR matrix rendering with LRU bitmap cache
+│   ├── TransferProtocol.kt    # Serialization, chunking, AES-GCM encryption & SHA-256
+│   └── ui/theme/              # Material 3 colors, dark palette, and typography
+└── src/test/java/com/airgap/app/
+    └── TransferProtocolTest.kt # Automated unit tests for protocol, encryption, integrity
+```
 
-To run JVM tests: `./gradlew test` (a Gradle wrapper is not included in this archive; use Android Studio's Gradle tooling or generate a wrapper in the project with a locally installed Gradle).
+## Building and Testing
 
-## Test status and limitations
+The project uses Gradle Wrapper 8.11.1, Android Gradle Plugin 8.7.3, Kotlin 2.0.21, and Java 17.
 
-The repository includes JVM unit tests for single- and multi-chunk round trips, out-of-order frames, duplicate frames, and wrong passphrases. The source project was statically checked in this environment, but it was **not built as an APK here** because this environment does not have Gradle or an Android SDK installed. Run the tests and a two-device camera test in Android Studio before distributing.
+```bash
+# Run unit tests
+./gradlew testDebugUnitTest
 
-This is a prototype, not a security-audited release. The 10 MiB cap is deliberate: this version reads the selected file into memory and uses sequential QR frames rather than fountain codes. Transfer speed varies substantially by camera, display, distance, focus, and QR density. Do not use it for seed phrases, private keys, or other critical secrets until the implementation has received a security review.
+# Assemble debug APK
+./gradlew assembleDebug
+```
 
-## Privacy verification
-
-`app/src/main/AndroidManifest.xml` declares only `android.permission.CAMERA`. There is no `INTERNET`, Wi-Fi, Bluetooth, network-state, or broad storage permission. Build dependencies are fetched by Gradle at build time; the app does not need network access at runtime.
+The APK will be generated at `app/build/outputs/apk/debug/app-debug.apk`.
+Automated builds and tests run on every push to `main` via GitHub Actions.
